@@ -1,0 +1,15 @@
+# --- Backend ---
+**/node_modules
+**/.env
+
+# --- Frontend (Flutter) ---
+**/build
+**/ios
+**/android
+**/.dart_tool
+**/.idea
+**/.metadata
+**/.packages
+
+# 忽略系統檔案
+.DS_Store
