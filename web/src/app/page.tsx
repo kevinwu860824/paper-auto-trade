@@ -9,24 +9,26 @@ import { getRealAccountData } from "@/lib/schwabEngine"
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { LogoutButton } from "@/components/LogoutButton"
+
 import { AIPanel } from "@/components/AIPanel"
+import { TradeSignals } from "@/components/TradeSignals"
 
 export const revalidate = 60 // Refresh every minute
 
 export default async function Dashboard() {
   const supabase = await createClient()
-
+  
   // V23 Get the current authenticated user
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return redirect('/login')
 
   const yahooFinance = new (YahooFinance as any)()
-
+  
   let cash = 0
   let positions: any[] = []
   let isConnected = false
   let realAccountData: any = null
-  let aiTickers: string[] = ["AAPL", "NVDA", "TSLA"] // Default fallback
+  let aiTickers: string[] = ["AAPL", "NVDA", "TSLA"] // 預設值
 
   // 1. Fetch SPY for simple chart/context
   let spyPrice = 0
@@ -47,6 +49,21 @@ export default async function Dashboard() {
     }
   } catch(e) {
     console.error("Error fetching AI settings", e)
+  }
+  
+  // 1.6 Fetch Latest AI Trade Signals
+  let aiSignals: any[] = []
+  try {
+    const { data: signals } = await supabase
+      .from('ai_trade_signals')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    
+    aiSignals = signals || []
+  } catch (e) {
+    console.error("Error fetching AI signals", e)
   }
 
   // 2. Fetch User-Specific Supabase Positions & State + Schwab Token Status (V25.7 Admin Init)
@@ -142,24 +159,17 @@ export default async function Dashboard() {
           </nav>
 
           <div className="flex items-center gap-3 border-l border-white/10 pl-6 cursor-pointer group">
-            <Link href="/api/auth/schwab" className="flex items-center gap-3 hover:opacity-80 transition-all">
-              {isConnected && !realAccountData ? (
-                <>
-                  <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                  <span className="text-xs font-bold text-amber-400 underline decoration-amber-500/30">授權已過期，請重連</span>
-                </>
-              ) : isConnected ? (
-                <>
-                  <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-xs font-medium text-slate-400 group-hover:text-white transition-colors">Schwab 已連線 (點擊重連)</span>
-                </>
-              ) : (
-                <>
-                  <div className="h-2 w-2 rounded-full bg-rose-500" />
-                  <span className="text-xs font-bold text-rose-400 underline decoration-rose-500/30">點擊連接 Schwab</span>
-                </>
-              )}
-            </Link>
+            {isConnected ? (
+              <div className="flex items-center gap-3">
+                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-xs font-medium text-slate-400 group-hover:text-white transition-colors">Schwab 已連線</span>
+              </div>
+            ) : (
+              <Link href="/api/auth/schwab" className="flex items-center gap-3 hover:opacity-80 transition-all">
+                <div className="h-2 w-2 rounded-full bg-rose-500" />
+                <span className="text-xs font-bold text-rose-400 underline decoration-rose-500/30">點擊連接 Schwab</span>
+              </Link>
+            )}
           </div>
         </div>
       </header>
@@ -220,6 +230,8 @@ export default async function Dashboard() {
                 </CardContent>
               </Card>
             </div>
+
+            <TradeSignals signals={aiSignals} />
 
             <Card className="bg-white/5 border-white/10 backdrop-blur-md">
               <CardHeader>
