@@ -6,6 +6,12 @@ import { Brain, ChevronDown, ChevronUp, Clock, Target } from "lucide-react"
 import { useState } from 'react'
 import { cn } from "@/lib/utils"
 
+export interface AnalystSignal {
+  signal: string;
+  confidence: number;
+  reasoning: string;
+}
+
 export interface TradeSignal {
   id: string;
   ticker: string;
@@ -13,7 +19,54 @@ export interface TradeSignal {
   quantity: number;
   reasoning: string;
   created_at: string;
+  composite_score?: number;
+  analyst_data?: Record<string, AnalystSignal>;
 }
+
+const ScoreGauge = ({ score }: { score: number }) => {
+  const getColor = (s: number) => {
+    if (s >= 80) return "text-emerald-500 stroke-emerald-500";
+    if (s >= 60) return "text-emerald-400 stroke-emerald-400";
+    if (s >= 40) return "text-amber-400 stroke-amber-400";
+    if (s >= 20) return "text-orange-400 stroke-orange-400";
+    return "text-rose-500 stroke-rose-500";
+  };
+
+  const radius = 18;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+
+  return (
+    <div className="relative inline-flex items-center justify-center">
+      <svg className="h-10 w-10 transform -rotate-90">
+        <circle
+          className="text-white/10"
+          strokeWidth="3"
+          stroke="currentColor"
+          fill="transparent"
+          r={radius}
+          cx="20"
+          cy="20"
+        />
+        <circle
+          className={cn("transition-all duration-1000 ease-out", getColor(score))}
+          strokeWidth="3"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          stroke="currentColor"
+          fill="transparent"
+          r={radius}
+          cx="20"
+          cy="20"
+        />
+      </svg>
+      <span className={cn("absolute text-[10px] font-bold font-mono", getColor(score).split(' ')[0])}>
+        {score}
+      </span>
+    </div>
+  );
+};
 
 export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -39,9 +92,10 @@ export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
             <thead>
               <tr className="border-b border-white/10 text-slate-500 uppercase text-[10px] font-bold tracking-widest">
                 <th className="px-6 py-3">分析時間</th>
-                <th className="px-6 py-3">股票</th>
-                <th className="px-6 py-3">動作</th>
-                <th className="px-6 py-3">數量</th>
+                <th className="px-6 py-3">股票代號</th>
+                <th className="px-6 py-3">AI 評分</th>
+                <th className="px-6 py-3">建議動作</th>
+                <th className="px-6 py-3">交易數量</th>
                 <th className="px-6 py-3 text-right">詳情</th>
               </tr>
             </thead>
@@ -82,6 +136,9 @@ export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
                         </div>
                       </td>
                       <td className="px-6 py-4">
+                        <ScoreGauge score={signal.composite_score || 50} />
+                      </td>
+                      <td className="px-6 py-4">
                         <Badge 
                           className={cn(
                             "font-bold text-[10px] px-2 py-0.5",
@@ -91,11 +148,11 @@ export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
                           )}
                           variant="outline"
                         >
-                          {signal.action}
+                          {signal.action === 'BUY' ? '買入 (BUY)' : signal.action === 'SELL' ? '賣出 (SELL)' : '觀望 (HOLD)'}
                         </Badge>
                       </td>
                       <td className="px-6 py-4 text-slate-300 font-mono">
-                        {signal.quantity > 0 ? signal.quantity : '--'}
+                        {signal.quantity > 0 ? `${signal.quantity} 股` : '--'}
                       </td>
                       <td className="px-6 py-4 text-right">
                         {expandedId === signal.id ? (
@@ -106,11 +163,42 @@ export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
                       </td>
                     </tr>
                     {expandedId === signal.id && (
-                      <tr className="bg-black/20">
-                        <td colSpan={5} className="px-6 py-4">
-                          <div className="text-xs leading-relaxed text-slate-300 border-l-2 border-emerald-500/30 pl-4 py-1">
-                            <span className="text-emerald-400 font-bold mb-1 block uppercase tracking-tighter text-[10px]">AI Reasoning & Analysis</span>
-                            {signal.reasoning}
+                      <tr className="bg-black/40">
+                        <td colSpan={6} className="px-6 py-6 ring-1 ring-white/5">
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            <div className="md:col-span-1 space-y-4">
+                              <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+                                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">綜合分析結論</h4>
+                                <p className="text-xs text-slate-300 leading-relaxed italic border-l-2 border-emerald-500/50 pl-3">
+                                  {signal.reasoning}
+                                </p>
+                              </div>
+                            </div>
+                            
+                            <div className="md:col-span-3">
+                              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">各領域專家報告 (Detailed Reports)</h4>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {signal.analyst_data && Object.entries(signal.analyst_data).map(([agent, data]) => (
+                                  <div key={agent} className="p-3 rounded-lg bg-white/5 border border-white/10 hover:border-white/20 transition-colors">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="text-[10px] font-bold text-emerald-400 uppercase truncate max-w-[120px]">
+                                        {agent.replace('_agent', '').replace(/_/g, ' ')}
+                                      </span>
+                                      <Badge variant="outline" className={cn(
+                                        "text-[8px] py-0 px-1 border-white/10",
+                                        data.signal.toLowerCase() === 'bullish' ? "text-emerald-400" : 
+                                        data.signal.toLowerCase() === 'bearish' ? "text-rose-400" : "text-amber-400"
+                                      )}>
+                                        {data.signal.toUpperCase()} ({data.confidence}%)
+                                      </Badge>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 leading-snug line-clamp-3 hover:line-clamp-none transition-all cursor-help">
+                                      {data.reasoning}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                           </div>
                         </td>
                       </tr>
