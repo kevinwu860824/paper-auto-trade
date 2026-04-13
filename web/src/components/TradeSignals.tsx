@@ -177,27 +177,37 @@ export function TradeSignals({ signals }: { signals: TradeSignal[] }) {
                             
                             <div className="md:col-span-3">
                               <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">各領域專家報告 (Detailed Reports)</h4>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {signal.analyst_data && Object.entries(signal.analyst_data).map(([agent, data]) => (
-                                  <div key={agent} className="p-3 rounded-lg bg-white/5 border border-white/10 hover:border-white/20 transition-colors">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <span className="text-[10px] font-bold text-emerald-400 uppercase truncate max-w-[120px]">
-                                        {agent.replace('_agent', '').replace(/_/g, ' ')}
-                                      </span>
-                                      <Badge variant="outline" className={cn(
-                                        "text-[8px] py-0 px-1 border-white/10",
-                                        data.signal.toLowerCase() === 'bullish' ? "text-emerald-400" : 
-                                        data.signal.toLowerCase() === 'bearish' ? "text-rose-400" : "text-amber-400"
-                                      )}>
-                                        {data.signal.toUpperCase()} ({data.confidence}%)
-                                      </Badge>
-                                    </div>
-                                    <p className="text-[11px] text-slate-400 leading-snug line-clamp-3 hover:line-clamp-none transition-all cursor-help">
-                                      {data.reasoning}
-                                    </p>
-                                  </div>
-                                ))}
-                              </div>
+                              {signal.analyst_data && Object.keys(signal.analyst_data).length > 0 ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                  {Object.entries(signal.analyst_data).map(([agent, data]) => {
+                                    if (!data || !data.signal) return null;
+                                    const sigType = data.signal.toLowerCase();
+                                    return (
+                                      <div key={agent} className="p-3 rounded-lg bg-white/5 border border-white/10 hover:border-white/20 transition-colors">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <span className="text-[10px] font-bold text-emerald-400 uppercase truncate max-w-[120px]">
+                                            {agent.replace('_agent', '').replace(/_/g, ' ')}
+                                          </span>
+                                          <Badge variant="outline" className={cn(
+                                            "text-[8px] py-0 px-1 border-white/10",
+                                            sigType === 'bullish' ? "text-emerald-400" : 
+                                            sigType === 'bearish' ? "text-rose-400" : "text-amber-400"
+                                          )}>
+                                            {data.signal.toUpperCase()} ({data.confidence}%)
+                                          </Badge>
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 leading-snug line-clamp-3 hover:line-clamp-none transition-all cursor-help">
+                                          {data.reasoning || "尚無詳細推論摘要"}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="p-10 text-center border border-dashed border-white/10 rounded-xl">
+                                  <p className="text-xs text-slate-500 italic">舊有紀錄尚未生成詳細報告，新運行的分析將會顯示於此。</p>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
