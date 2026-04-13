@@ -4,17 +4,82 @@ import YahooFinance from 'yahoo-finance2';
 
 async function getAccessToken(userId: string) {
   const supabase = createAdminSupabase();
-  const { data } = await supabase
+  const { data: settings } = await supabase
     .from('settings')
-    .select('value')
-    .eq('key', 'schwab_access_token')
+    .select('key, value')
     .eq('user_id', userId)
-    .order('id', { ascending: false }) // V25.5 Stable: Always pick the freshest token
-    .limit(1)
-    .maybeSingle();
+    .in('key', ['schwab_access_token', 'schwab_refresh_token', 'schwab_expires_at']);
 
-  if (!data?.value) throw new Error('Schwab Access Token not available in Supabase settings.');
-  return data.value;
+  if (!settings || settings.length === 0) {
+    throw new Error('Schwab credentials not found. Please connect your account.');
+  }
+
+  const find = (key: string) => settings.find(s => s.key === key)?.value;
+  
+  let accessToken = find('schwab_access_token');
+  const refreshToken = find('schwab_refresh_token');
+  const expiresAt = Number(find('schwab_expires_at') || '0');
+
+  // If token is missing, expired, or near expiry (within 2 minutes), perform proactive refresh
+  const now = Date.now();
+  if (!accessToken || !expiresAt || now >= (expiresAt - 120000)) {
+    console.log(`[Schwab Engine] Token expired or near expiry for user [${userId}]. Refreshing...`);
+    if (!refreshToken) throw new Error('Refresh token missing. Please re-authenticate.');
+    
+    const refreshed = await refreshAccessToken(userId, refreshToken);
+    accessToken = refreshed;
+  }
+
+  return accessToken;
+}
+
+async function refreshAccessToken(userId: string, refreshToken: string) {
+  const clientId = process.env.SCHWAB_CLIENT_ID;
+  const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  try {
+    const tokenResponse = await fetch('https://api.schwabapi.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken
+      }).toString()
+    });
+
+    const newData = await tokenResponse.json();
+    if (!tokenResponse.ok) {
+      console.error(`[Schwab Engine] Refresh Failed:`, newData);
+      throw new Error(`Token Refresh Failed: ${JSON.stringify(newData)}`);
+    }
+
+    const { access_token, refresh_token, expires_in } = newData;
+    const expiresAt = Date.now() + (expires_in * 1000);
+
+    const supabase = createAdminSupabase();
+    await supabase.from('settings').upsert([
+      { key: 'schwab_access_token', value: access_token, user_id: userId },
+      { key: 'schwab_expires_at', value: expiresAt.toString(), user_id: userId }
+    ], { onConflict: 'user_id,key' });
+
+    // Schwab sometimes returns a new refresh token (Rotation)
+    if (refresh_token) {
+      await supabase.from('settings').upsert(
+        { key: 'schwab_refresh_token', value: refresh_token, user_id: userId },
+        { onConflict: 'user_id,key' }
+      );
+    }
+
+    console.log(`✅ [Schwab Engine] Token refreshed successfully for [${userId}].`);
+    return access_token;
+  } catch (e: any) {
+    console.error(`[Schwab Engine] Fatal Refresh Error:`, e.message);
+    throw e;
+  }
 }
 
 export async function getSchwabQuotes(userId: string, tickers: string[]) {

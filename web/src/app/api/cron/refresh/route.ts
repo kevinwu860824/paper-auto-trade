@@ -42,9 +42,14 @@ export async function GET(request: Request) {
 
         const newData = await tokenResponse.json();
         if (tokenResponse.ok) {
-           await supabase.from('settings').upsert({ key: 'schwab_access_token', value: newData.access_token, user_id: userId });
-           if (newData.refresh_token) {
-               await supabase.from('settings').upsert({ key: 'schwab_refresh_token', value: newData.refresh_token, user_id: userId });
+           const { access_token, refresh_token, expires_in } = newData;
+           const expiresAt = Date.now() + (expires_in * 1000);
+
+           await supabase.from('settings').upsert({ key: 'schwab_access_token', value: access_token, user_id: userId });
+           await supabase.from('settings').upsert({ key: 'schwab_expires_at', value: expiresAt.toString(), user_id: userId });
+           
+           if (refresh_token) {
+               await supabase.from('settings').upsert({ key: 'schwab_refresh_token', value: refresh_token, user_id: userId });
            }
            results.push({ userId, status: 'Success' });
         } else {

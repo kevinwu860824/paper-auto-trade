@@ -47,7 +47,8 @@ export async function GET(request: Request) {
       return new NextResponse(JSON.stringify(data), { status: tokenResponse.status });
     }
 
-    const { access_token, refresh_token } = data;
+    const { access_token, refresh_token, expires_in } = data;
+    const expiresAt = Date.now() + (expires_in * 1000);
 
     // Initialize SSR Supabase Client to read session cookies
     const supabase = await createClient();
@@ -57,19 +58,22 @@ export async function GET(request: Request) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     // 💡 明確加上 { onConflict: 'user_id,key' }，並抓取潛在錯誤
-    const { error: err1 } = await supabase.from('settings').upsert(
+    await supabase.from('settings').upsert(
       { key: 'schwab_access_token', value: access_token, user_id: user.id },
       { onConflict: 'user_id,key' }
     );
-    if (err1) console.error("Access Token 寫入失敗:", err1);
 
-    const { error: err2 } = await supabase.from('settings').upsert(
+    await supabase.from('settings').upsert(
       { key: 'schwab_refresh_token', value: refresh_token, user_id: user.id },
       { onConflict: 'user_id,key' }
     );
-    if (err2) console.error("Refresh Token 寫入失敗:", err2);
 
-    console.log(`✅ OAuth Flow completed successfully for user [${user.id}]. Tokens written to Supabase.`);
+    await supabase.from('settings').upsert(
+      { key: 'schwab_expires_at', value: expiresAt.toString(), user_id: user.id },
+      { onConflict: 'user_id,key' }
+    );
+
+    console.log(`✅ OAuth Flow completed successfully for user [${user.id}]. Tokens & Expiry written to Supabase.`);
     // Redirect the user back to the dashboard with a success notification flag
     const url = new URL('/', request.url);
     url.searchParams.set('schwab_linked', 'true');

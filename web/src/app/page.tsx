@@ -27,6 +27,7 @@ export default async function Dashboard() {
   let cash = 0
   let positions: any[] = []
   let isConnected = false
+  let hasToken = false
   let realAccountData: any = null
   let aiTickers: string[] = ["AAPL", "NVDA", "TSLA"] // 預設值
 
@@ -106,18 +107,20 @@ export default async function Dashboard() {
     if (dbState) {
       cash = dbState.cash
       positions = dbPos || []
-      isConnected = !!tokenData?.value
+      hasToken = !!tokenData?.value
     }
   } catch (e) {
     console.error("Dashboard DB fetch error:", e)
   }
 
   // 3. Fetch Real Brokerage Data (Scoped to current user)
-  if (isConnected) {
+  if (hasToken) {
     try {
       realAccountData = await getRealAccountData(user.id)
+      isConnected = !!realAccountData
     } catch (e: any) {
       console.error("Real account data error:", e.message)
+      isConnected = false
     }
   }
 
@@ -164,10 +167,15 @@ export default async function Dashboard() {
                 <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-xs font-medium text-slate-400 group-hover:text-white transition-colors">Schwab 已連線</span>
               </div>
-            ) : (
+            ) : hasToken && !isConnected ? (
               <Link href="/api/auth/schwab" className="flex items-center gap-3 hover:opacity-80 transition-all">
                 <div className="h-2 w-2 rounded-full bg-rose-500" />
-                <span className="text-xs font-bold text-rose-400 underline decoration-rose-500/30">點擊連接 Schwab</span>
+                <span className="text-xs font-bold text-rose-400 underline decoration-rose-500/30">Schwab 連線已中斷</span>
+              </Link>
+            ) : (
+              <Link href="/api/auth/schwab" className="flex items-center gap-3 hover:opacity-80 transition-all">
+                <div className="h-2 w-2 rounded-full bg-slate-500" />
+                <span className="text-xs font-bold text-slate-400">尚未連接 Schwab</span>
               </Link>
             )}
           </div>
