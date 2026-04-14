@@ -90,6 +90,53 @@ export async function getSchwabQuotes(userId: string, tickers: string[]) {
   return response.json();
 }
 
+/**
+ * 🛰️ Schwab Quote Manager (Snapshot Sync)
+ * Fetches real-time price & change % for the 118-stock watchlist in batches.
+ */
+export async function syncSchwabQuotes(userId: string) {
+  console.log(`\n===== [${new Date().toISOString()}] Schwab Quote Sync Started =====`);
+  const supabase = createAdminSupabase();
+  const BATCH_SIZE = 40; // Schwab limit is usually 50 per request
+  const results: any[] = [];
+
+  for (let i = 0; i < watchlisthigh.length; i += BATCH_SIZE) {
+    const batch = watchlisthigh.slice(i, i + BATCH_SIZE);
+    try {
+      const quotes = await getSchwabQuotes(userId, batch);
+      // Schwab API returns an object with ticker keys
+      for (const ticker of batch) {
+        const q = quotes[ticker];
+        if (!q) continue;
+
+        // Extract last price and net change % (e.g. 0.05 for 5%)
+        const lastPrice = q.quote.lastPrice;
+        const netChangePercent = q.quote.netChangePercent;
+        const totalVolume = q.quote.totalVolume;
+
+        results.push({
+          ticker,
+          last_close: lastPrice,
+          net_change_percent: netChangePercent,
+          total_volume: totalVolume,
+          updated_at: new Date().toISOString()
+        });
+      }
+      console.log(`Synced batch ${i / BATCH_SIZE + 1} of Schwab quotes...`);
+      await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit protection
+    } catch (e: any) {
+      console.error(`Error syncing Schwab quotes for batch ${i}:`, e.message);
+    }
+  }
+
+  if (results.length > 0) {
+    const { error } = await supabase.from('market_snapshots').upsert(results, { onConflict: 'ticker' });
+    if (error) console.error("Upsert Error (Schwab Snapshots):", error.message);
+  }
+
+  return { status: 'Schwab Sync Complete', count: results.length };
+}
+
 export async function getSchwabPriceHistory(userId: string, ticker: string, startDate: Date, endDate: Date) {
   const token = await getAccessToken(userId);
   const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
@@ -128,12 +175,20 @@ export async function executeBuy(userId: string, ticker: string, shares: number,
   if (existingPos) {
     const newShares = existingPos.shares + shares;
     const newAvgCost = ((existingPos.avgCost * existingPos.shares) + cost) / newShares;
-    await supabase.from('positions').update({ shares: newShares, avgCost: newAvgCost }).eq('ticker', ticker).eq('user_id', userId);
+    const { error: upError } = await supabase.from('positions').update({ shares: newShares, avgCost: newAvgCost }).eq('ticker', ticker).eq('user_id', userId);
+    if (upError) throw new Error(`Failed to update position: ${upError.message}`);
   } else {
-    await supabase.from('positions').insert({ ticker, shares, avgCost: price, peakPrice: price, user_id: userId });
+    const { error: inError } = await supabase.from('positions').insert({ ticker, shares, avgCost: price, peakPrice: price, user_id: userId });
+    if (inError) throw new Error(`Failed to insert position: ${inError.message}`);
   }
 
-  await supabase.from('portfolio_state').update({ cash: state.cash - cost, history: newHistory }).eq('user_id', userId);
+  const { error: stateUpError } = await supabase.from('portfolio_state').update({ cash: state.cash - cost, history: newHistory }).eq('user_id', userId);
+  if (stateUpError) {
+      // Critical: If state update fails after position update, we should technically roll back, but for now we log it.
+      console.error(`CRITICAL: Cash update failed after position update: ${stateUpError.message}`);
+      throw stateUpError;
+  }
+
   console.log(`📈 BUY [${ticker}]: ${shares} shares @ $${price.toFixed(2)}`);
   if (executedTrades) executedTrades.push({ ticker, action: 'BUY', price, shares });
   return { success: true };
@@ -254,10 +309,11 @@ export async function processAISignals(userId: string) {
 
       // Update signal status based on realization
       if (res?.success) {
-        await supabase.from('ai_trade_signals').update({ 
+        const { error: finalError } = await supabase.from('ai_trade_signals').update({ 
           status: 'EXECUTED', 
           executed_at: new Date().toISOString() 
         }).eq('id', signal.id);
+        if (finalError) console.error(`Failed to mark signal as EXECUTED: ${finalError.message}`);
       } else {
         await supabase.from('ai_trade_signals').update({ 
           status: 'FAILED',

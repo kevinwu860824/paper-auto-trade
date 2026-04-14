@@ -29,6 +29,9 @@ const AGENT_NAMES: Record<string, string> = {
   "valuation_analyst_agent": "價值估值專家",
   "sentiment_analyst_agent": "市場情緒分析",
   "warren_buffett_agent": "巴菲特模擬思維",
+  "michael_burry_agent": "Michael Burry (DNA 狙擊器)",
+  "news_sentiment_agent": "新聞否決與情緒監控",
+  "trend_checker_agent": "48h 趨勢修復引擎",
   "risk_management_agent": "風險控管專家"
 };
 
@@ -119,11 +122,11 @@ export function TradeSignals({ signals = [] }: { signals?: TradeSignal[] }) {
               </button>
             </div>
             <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
-              <div className="flex items-center gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col">
                   <span className="text-[10px] text-slate-500 font-bold uppercase mb-1">評估號誌</span>
                   <Badge variant="outline" className={cn(
-                    "text-xs font-bold px-3 py-1 border-white/10",
+                    "text-xs font-bold px-3 py-1 border-white/10 w-fit",
                     (selectedAnalyst.data.signal || '').toLowerCase() === 'bullish' ? "text-emerald-400 bg-emerald-500/10" : 
                     (selectedAnalyst.data.signal || '').toLowerCase() === 'bearish' ? "text-rose-400 bg-rose-500/10" : "text-amber-400 bg-amber-500/10"
                   )}>
@@ -135,6 +138,57 @@ export function TradeSignals({ signals = [] }: { signals?: TradeSignal[] }) {
                   <span className="text-lg font-mono font-bold text-white">{selectedAnalyst.data.confidence}%</span>
                 </div>
               </div>
+
+              {/* sniper diagnosis metrics */}
+              {(selectedAnalyst.agent === 'michael_burry_agent' || selectedAnalyst.agent === 'news_sentiment_agent' || selectedAnalyst.agent === 'trend_checker_agent') && (
+                <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
+                  <h4 className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Sniper 狙擊診斷指標</h4>
+                  <div className="grid grid-cols-1 gap-3">
+                    {/* similarity for burry */}
+                    {selectedAnalyst.data.historical_similarity_score !== undefined && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400">大師分析：10 年歷史相似度</span>
+                          <span className="text-emerald-400 font-mono font-bold">{Math.round(selectedAnalyst.data.historical_similarity_score * 100)}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-emerald-500 transition-all duration-1000" 
+                            style={{ width: `${selectedAnalyst.data.historical_similarity_score * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* internal flaw for news */}
+                    {selectedAnalyst.data.reasoning_type && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-400">消息類型分析</span>
+                        <Badge variant="outline" className={cn(
+                           "text-[10px] py-0 px-2",
+                           selectedAnalyst.data.is_internal_flaw ? "border-rose-500/50 text-rose-400 bg-rose-500/10" : "border-emerald-500/50 text-emerald-400 bg-emerald-500/10"
+                        )}>
+                          {selectedAnalyst.data.reasoning_type.toUpperCase()} 
+                          {selectedAnalyst.data.is_internal_flaw ? " (核心地雷 VETO)" : " (市場恐慌)"}
+                        </Badge>
+                      </div>
+                    )}
+
+                    {/* trend confirmed */}
+                    {selectedAnalyst.data.confirmed !== undefined && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-400">48h MA5 趨勢狀態</span>
+                        <Badge variant="outline" className={cn(
+                           "text-[10px] py-0 px-2",
+                           selectedAnalyst.data.confirmed ? "border-emerald-400 text-emerald-400 bg-emerald-500/10" : "border-amber-400 text-amber-400 bg-amber-500/10"
+                        )}>
+                          {selectedAnalyst.data.confirmed ? "已站穩 MA5 (可加碼)" : "尚未脫離回撤 (觀望)"}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-3">
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">詳細推論摘要 (Reasoning)</span>

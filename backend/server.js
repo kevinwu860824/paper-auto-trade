@@ -216,8 +216,23 @@ async function startServer() {
 
   // 定時執行交易掃描
   const scanInterval = 3600 * 1000;
-  console.log('\n🚀 自動交易策略引擎已設定，将每小時在背景掃描...');
-  setInterval(simulationEngine.scanForSignalsAndTrade, scanInterval);
+  console.log('\n🚀 自動交易策略引擎已設定，將每小時為所有活躍使用者進行背景掃描...');
+  
+  setInterval(async () => {
+    try {
+        const { data: users } = await supabase.from('settings').select('user_id').eq('key', 'schwab_access_token');
+        if (users && users.length > 0) {
+            for (const user of users) {
+                if (user.user_id) {
+                    console.log(`[Timer] 正在為使用者 ${user.user_id} 執行自動掃描...`);
+                    await simulationEngine.scanForSignalsAndTrade(user.user_id);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('背景掃描循環發生錯誤:', err);
+    }
+  }, scanInterval);
 
   // 啟动 Web 伺服器
   app.listen(port, '0.0.0.0', () => {

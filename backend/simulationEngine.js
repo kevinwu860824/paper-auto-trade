@@ -78,15 +78,18 @@ async function isMarketBullish() {
 */
 
 // 獲取投资组合
-async function getPortfolio() {
-  const { data: stateData, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('id', 1).single();
-  const { data: dbPositions, error: positionsError } = await supabase.from('positions').select('*');
+async function getPortfolio(userId) {
+  const { data: stateData, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('user_id', userId).order('id', { ascending: false }).limit(1).maybeSingle();
+  const { data: dbPositions, error: positionsError } = await supabase.from('positions').select('*').eq('user_id', userId);
 
   if (stateError || positionsError) {
     console.error('讀取資料庫投資組合失敗:', stateError || positionsError);
     throw new Error('Failed to fetch portfolio from DB.');
   }
-  if (dbPositions.length === 0) {
+  if (!stateData) {
+     return { cash: 100000, positions: [], history: [], totalPortfolioValue: 100000 };
+  }
+  if (!dbPositions || dbPositions.length === 0) {
     return { cash: stateData.cash, positions: [], history: stateData.history, totalPortfolioValue: stateData.cash };
   }
   const tickers = dbPositions.map(p => p.ticker);
@@ -104,41 +107,41 @@ async function getPortfolio() {
   return { cash: stateData.cash, positions: updatedPositions, history: stateData.history || [], totalPortfolioValue };
 }
 
-async function executeBuy(ticker, shares) {
-  const quotesData = await getSchwabQuotes([ticker]);
+async function executeBuy(userId, ticker, shares) {
+  const quotesData = await getSchwabQuotes(ticker.split(',')); // Helper expects array or handles mapping
   const price = quotesData[ticker]?.quote?.lastPrice;
   if (!price) throw new Error(`無法獲取 [${ticker}] 的價格`);
 
   const cost = price * shares;
-  const { data: state, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('id', 1).single();
-  if (stateError) throw stateError;
+  const { data: state, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('user_id', userId).order('id', { ascending: false }).limit(1).maybeSingle();
+  if (stateError || !state) throw new Error(stateError ? stateError.message : '找不到指定的投資組合狀態');
   if (state.cash < cost) return { success: false, message: '現金不足' };
   
-  const { data: existingPos, error: posError } = await supabase.from('positions').select('*').eq('ticker', ticker).single();
-  if (posError && posError.code !== 'PGRST116') throw posError; // PGRST116 = no rows found, which is fine
+  const { data: existingPos, error: posError } = await supabase.from('positions').select('*').eq('ticker', ticker).eq('user_id', userId).maybeSingle();
+  if (posError) throw posError;
 
-  const newHistory = [...state.history, { type: 'BUY', date: new Date().toISOString(), ticker, shares, price }];
+  const newHistory = [...(state.history || []), { type: 'BUY', date: new Date().toISOString(), ticker, shares, price }];
   
   if (existingPos) { // 更新現有持股
     const newShares = existingPos.shares + shares;
     const newAvgCost = ((existingPos.avgCost * existingPos.shares) + cost) / newShares;
-    const { error: updatePosError } = await supabase.from('positions').update({ shares: newShares, avgCost: newAvgCost }).eq('ticker', ticker);
+    const { error: updatePosError } = await supabase.from('positions').update({ shares: newShares, avgCost: newAvgCost }).eq('ticker', ticker).eq('user_id', userId);
     if (updatePosError) throw updatePosError;
   } else { // 新增持股
-    const { error: insertPosError } = await supabase.from('positions').insert({ ticker, shares, avgCost: price, peakPrice: price });
+    const { error: insertPosError } = await supabase.from('positions').insert({ ticker, shares, avgCost: price, peakPrice: price, user_id: userId });
     if (insertPosError) throw insertPosError;
   }
   
   // 更新現金餘額和歷史紀錄
-  const { error: updateStateError } = await supabase.from('portfolio_state').update({ cash: state.cash - cost, history: newHistory }).eq('id', 1);
+  const { error: updateStateError } = await supabase.from('portfolio_state').update({ cash: state.cash - cost, history: newHistory }).eq('user_id', userId);
   if (updateStateError) throw updateStateError;
   
   console.log(`📈 買入成功 [${ticker}]: ${shares} 股 @ $${price.toFixed(2)}`);
   return { success: true, message: '買入成功' };
 }
 
-async function executeSell(ticker, shares) {
-    const { data: posToSell, error: posError } = await supabase.from('positions').select('*').eq('ticker', ticker).single();
+async function executeSell(userId, ticker, shares) {
+    const { data: posToSell, error: posError } = await supabase.from('positions').select('*').eq('ticker', ticker).eq('user_id', userId).maybeSingle();
     if (!posToSell || posError) return { success: false, message: '未持有該部位' };
     if (posToSell.shares < shares) return { success: false, message: '持股不足' };
 
@@ -146,21 +149,21 @@ async function executeSell(ticker, shares) {
     const price = quotesData[ticker]?.quote?.lastPrice;
     if (!price) throw new Error(`無法獲取 [${ticker}] 的價格`);
     
-    const { data: state, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('id', 1).single();
-    if (stateError) throw stateError;
+    const { data: state, error: stateError } = await supabase.from('portfolio_state').select('cash, history').eq('user_id', userId).order('id', { ascending: false }).limit(1).maybeSingle();
+    if (stateError || !state) throw new Error('Could not fetch portfolio state');
 
-    const newHistory = [...state.history, { type: 'SELL', date: new Date().toISOString(), ticker, shares, price }];
+    const newHistory = [...(state.history || []), { type: 'SELL', date: new Date().toISOString(), ticker, shares, price }];
 
     if (posToSell.shares - shares <= 0) { // 賣出全部
-        const { error } = await supabase.from('positions').delete().eq('ticker', ticker);
+        const { error } = await supabase.from('positions').delete().eq('ticker', ticker).eq('user_id', userId);
         if (error) throw error;
     } else { // 賣出部分
         const newShares = posToSell.shares - shares;
-        const { error } = await supabase.from('positions').update({ shares: newShares }).eq('ticker', ticker);
+        const { error } = await supabase.from('positions').update({ shares: newShares }).eq('ticker', ticker).eq('user_id', userId);
         if (error) throw error;
     }
 
-    const { error: updateStateError } = await supabase.from('portfolio_state').update({ cash: state.cash + (price * shares), history: newHistory }).eq('id', 1);
+    const { error: updateStateError } = await supabase.from('portfolio_state').update({ cash: state.cash + (price * shares), history: newHistory }).eq('user_id', userId);
     if (updateStateError) throw updateStateError;
 
     console.log(`📉 賣出成功 [${ticker}]: ${shares} 股 @ $${price.toFixed(2)}`);
@@ -190,18 +193,18 @@ function getSwingLow(quotes, index, lookback) {
   return slice[lookback].low === lowest ? quotes[index] : null;
 }
 
-async function scanForSignalsAndTrade() {
-  console.log(`\n===== [${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 自動掃描開始 (終極切換引擎 Ultimate) =====`);
+async function scanForSignalsAndTrade(userId) {
+  console.log(`\n===== [${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 使用者 [${userId}] 自動掃描開始 =====`);
   if (!schwabAccessToken) {
       console.warn("⚠️ 掃描暫停：等待 Schwab API 認證...");
       return;
   }
   
   try {
-    const { data: dbPositions, error: posError } = await supabase.from('positions').select('*');
-    const { data: dbState, error: stateError } = await supabase.from('portfolio_state').select('cash').eq('id', 1).single();
+    const { data: dbPositions, error: posError } = await supabase.from('positions').select('*').eq('user_id', userId);
+    const { data: dbState, error: stateError } = await supabase.from('portfolio_state').select('cash').eq('user_id', userId).order('id', { ascending: false }).limit(1).maybeSingle();
 
-    if (posError || stateError) {
+    if (posError || stateError || !dbState) {
         console.error('掃描開始時讀取資料庫失敗:', posError || stateError);
         return;
     }
@@ -298,13 +301,13 @@ async function scanForSignalsAndTrade() {
     }
 
     // 確保抓取最新資料庫狀態來算錢
-    const { data: updatedPositions } = await supabase.from('positions').select('*');
-    const { data: updatedState } = await supabase.from('portfolio_state').select('cash').eq('id', 1).single();
-    let pendingCash = updatedState.cash;
+    const { data: updatedPositions } = await supabase.from('positions').select('*').eq('user_id', userId);
+    const { data: updatedState } = await supabase.from('portfolio_state').select('cash').eq('user_id', userId).order('id', { ascending: false }).limit(1).maybeSingle();
+    let pendingCash = updatedState?.cash || 0;
     let individualPosCount = 0;
     let totalPosValue = 0;
 
-    for (const p of updatedPositions) {
+    for (const p of (updatedPositions || [])) {
         if (p.ticker !== 'TQQQ') individualPosCount++;
         const pQuote = await getSchwabQuotes([p.ticker]);
         const cp = pQuote[p.ticker]?.quote?.lastPrice || p.avgCost;
@@ -325,7 +328,7 @@ async function scanForSignalsAndTrade() {
         
         if (sharesToBuy > 0) {
             console.log(`📥 抄底買入飛刀 [${item.ticker}] ${sharesToBuy} 股`);
-            const res = await executeBuy(item.ticker, sharesToBuy);
+            const res = await executeBuy(userId, item.ticker, sharesToBuy);
             if (res.success) {
                 pendingCash -= sharesToBuy * item.close;
                 individualPosCount++;
@@ -337,12 +340,12 @@ async function scanForSignalsAndTrade() {
         const tqqqData = await getSchwabQuotes(['TQQQ']);
         const tqqqPrice = tqqqData['TQQQ']?.quote?.lastPrice;
         if (tqqqPrice) {
-            const hasTqqq = updatedPositions.find(p => p.ticker === 'TQQQ');
+            const hasTqqq = (updatedPositions || []).find(p => p.ticker === 'TQQQ');
             if (pendingCash > 500) { 
                 const sharesToBuy = Math.floor((pendingCash - 50) / tqqqPrice); // 預留一點手續費或滑價空間
                 if (sharesToBuy > 0) {
                     console.log(`🚀 閒置資金全數買入 TQQQ 啟動牛市衝浪，買入 ${sharesToBuy} 股`);
-                    await executeBuy('TQQQ', sharesToBuy);
+                    await executeBuy(userId, 'TQQQ', sharesToBuy);
                 }
             } else if (hasTqqq) {
                 console.log(`🏄 目前正重倉 TQQQ 衝浪中，無需變更部位。`);
