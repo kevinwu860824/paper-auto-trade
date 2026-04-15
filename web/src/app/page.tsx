@@ -12,6 +12,7 @@ import { LogoutButton } from "@/components/LogoutButton"
 
 import { AIPanel } from "@/components/AIPanel"
 import { TradeSignals } from "@/components/TradeSignals"
+import { PortfolioDashboard } from "@/components/PortfolioDashboard"
 
 export const revalidate = 60 // Refresh every minute
 
@@ -67,50 +68,19 @@ export default async function Dashboard() {
     console.error("Error fetching AI signals", e)
   }
 
-  // 2. Fetch User-Specific Supabase Positions & State + Schwab Token Status (V25.7 Admin Init)
+  // 2. Fetch Schwab Token Status
   try {
-    let { data: dbState } = await supabase
-      .from('portfolio_state')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('id', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    // 🌟 核心修復：如果找不到該使用者的資料，改用「上帝權限」進行開戶
-    if (!dbState) {
-      console.log(`[V25.7] Initializing user simulation account via Admin Key for [${user.email}]...`)
-      const adminSupabase = createAdminSupabase()
-      const { data: newState, error: initError } = await adminSupabase
-        .from('portfolio_state')
-        .insert({ user_id: user.id, cash: 100000, history: [] })
-        .select()
-        .maybeSingle()
-
-      if (!initError && newState) {
-        dbState = newState
-      } else {
-        console.error("無法初始化使用者模擬帳戶 (Admin Error):", initError)
-      }
-    }
-
-    let { data: dbPos } = await supabase.from('positions').select('*').eq('user_id', user.id)
     const { data: tokenData } = await supabase
       .from('settings')
       .select('value')
       .eq('key', 'schwab_access_token')
       .eq('user_id', user.id)
-      //.order('id', { ascending: false })
       .limit(1)
       .maybeSingle()
-
-    if (dbState) {
-      cash = dbState.cash
-      positions = dbPos || []
-      hasToken = !!tokenData?.value
-    }
+    
+    hasToken = !!tokenData?.value
   } catch (e) {
-    console.error("Dashboard DB fetch error:", e)
+    console.error("Dashboard Token check error:", e)
   }
 
   // 3. Fetch Real Brokerage Data (Scoped to current user)
@@ -121,22 +91,6 @@ export default async function Dashboard() {
     } catch (e: any) {
       console.error("Real account data error:", e.message)
       isConnected = false
-    }
-  }
-
-  // 4. Calculate Simulation Equity
-  let simEquity = cash
-  const enrichedPositions = []
-  for (const p of positions) {
-    try {
-      const quote = await yahooFinance.quote(p.ticker)
-      const currentPrice = quote.regularMarketPrice || p.avgCost
-      const profit = ((currentPrice / p.avgCost) - 1) * 100
-      simEquity += currentPrice * p.shares
-      enrichedPositions.push({ ...p, currentPrice, profit })
-    } catch (e) {
-      simEquity += p.avgCost * p.shares
-      enrichedPositions.push({ ...p, currentPrice: p.avgCost, profit: 0 })
     }
   }
 
@@ -191,106 +145,26 @@ export default async function Dashboard() {
           </div>
         </div>
 
-        <Tabs defaultValue="sim" className="space-y-6">
+        <Tabs defaultValue="sim" className="space-y-8">
           <TabsList className="bg-white/5 border border-white/10 p-1 rounded-xl">
             <TabsTrigger value="sim" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6 font-bold">模擬戰場 (Simulation)</TabsTrigger>
             <TabsTrigger value="real" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6 font-bold">Charles Schwab (Real)</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="sim" className="space-y-8">
-            {/* Simulation Stats Overview */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">模擬總資產 (Equity)</CardTitle>
-                  <Wallet className="h-4 w-4 text-emerald-400" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-black font-mono text-white">${(simEquity || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                </CardContent>
-              </Card>
-              <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">可用現金 (Free Cash)</CardTitle>
-                  <LayoutDashboard className="h-4 w-4 text-indigo-400" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-black font-mono text-white">${(cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                </CardContent>
-              </Card>
-              <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">持倉總數 (Positions)</CardTitle>
-                  <Briefcase className="h-4 w-4 text-emerald-400" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-black font-mono text-white">{enrichedPositions.length} <span className="text-xs font-normal text-slate-500">TICKERS</span></div>
-                </CardContent>
-              </Card>
-              <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">系統狀態</CardTitle>
-                  <ShieldCheck className="h-4 w-4 text-emerald-400 animate-pulse" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-xl font-black text-emerald-400">🧠 智慧守護中</div>
-                </CardContent>
-              </Card>
-            </div>
+          <TabsContent value="sim" className="space-y-10">
+            {/* 🚀 TASK: Top-level Unified Portfolio Dashboard */}
+            <PortfolioDashboard />
 
             {/* War Room Layout GRID */}
-            <div className="grid grid-cols-12 gap-8">
+            <div className="grid grid-cols-12 gap-8 pt-4">
               {/* Left Column: Sniper Launchpad */}
               <div className="col-span-12 lg:col-span-4 space-y-6">
                 <AIPanel />
               </div>
 
-              {/* Right Column: Decision Center & Portfolio Details */}
+              {/* Right Column: Decision Center */}
               <div className="col-span-12 lg:col-span-8 space-y-8">
                 <TradeSignals />
-                
-                <Card className="bg-white/5 border-white/10 backdrop-blur-md border-t-emerald-500/20">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-lg font-bold flex items-center gap-2">
-                       <Briefcase className="h-4 w-4 text-slate-500" /> 持倉明細 (Current Positions)
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left">
-                        <thead>
-                          <tr className="border-b border-white/10 text-slate-500 uppercase text-[10px] font-black tracking-widest">
-                            <th className="px-4 py-3">股票代碼 (Ticker)</th>
-                            <th className="px-4 py-3">股數 (Qty)</th>
-                            <th className="px-4 py-3">平均成本 (Avg)</th>
-                            <th className="px-4 py-3">目前價格 (Price)</th>
-                            <th className="px-4 py-3">預估盈虧 (P/L %)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5 font-mono">
-                          {enrichedPositions.map((pos) => (
-                            <tr key={pos.ticker} className="hover:bg-white/5 transition-colors group">
-                              <td className="px-4 py-4 font-bold text-white group-hover:text-emerald-400 transition-colors uppercase">{pos.ticker}</td>
-                              <td className="px-4 py-4 text-slate-300">{pos.shares}</td>
-                              <td className="px-4 py-4 text-slate-300">${Number(pos.avgCost || 0).toFixed(2)}</td>
-                              <td className="px-4 py-4 text-slate-300">${Number(pos.currentPrice || 0).toFixed(2)}</td>
-                              <td className={`px-4 py-4 font-bold ${(pos.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {(pos.profit || 0) >= 0 ? '+' : ''}{(pos.profit || 0).toFixed(2)}%
-                              </td>
-                            </tr>
-                          ))}
-                          {enrichedPositions.length === 0 && (
-                            <tr>
-                              <td colSpan={5} className="px-4 py-10 text-center text-slate-500 bg-slate-900/10 italic">
-                                目前無主動持倉，等待 AI 狙擊。
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
             </div>
           </TabsContent>

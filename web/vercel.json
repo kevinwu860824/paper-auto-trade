@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/refresh",
       "schedule": "*/25 * * * *"
+    },
+    {
+      "path": "/api/cron/radar",
+      "schedule": "0 20 * * 1-5"
     }
   ]
 }
