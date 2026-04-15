@@ -1,14 +1,18 @@
 "use client"
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
     Play,
     TrendingUp,
-    History,
     ArrowLeft,
     BarChart3,
-    Download
+    History,
+    DollarSign,
+    ShieldAlert,
+    Calendar,
+    Loader2,
+    CheckCircle2
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -19,347 +23,323 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
-    ResponsiveContainer
+    ResponsiveContainer,
+    Legend
 } from 'recharts'
-import { runBacktestAction } from './actions'
-import { BacktestResult } from '@/lib/backtestEngine'
-import { LogoutButton } from '@/components/LogoutButton'
+import { motion, AnimatePresence } from 'framer-motion'
+import { cn } from '@/lib/utils'
 
-export default function BacktestExplorer() {
-    const [startDate, setStartDate] = useState('2021-01-01')
-    const [endDate, setEndDate] = useState('2026-03-31')
-    const [strategyMode, setStrategyMode] = useState<'mean-reversion' | 'momentum' | 'tqqq-trend'>('tqqq-trend')
-    const [spatialBuffer, setSpatialBuffer] = useState(1.5)
-    const [temporalBuffer, setTemporalBuffer] = useState(2)
+export default function BacktestVisualizer() {
+    // 1. States for controls
+    const [ticker, setTicker] = useState('NVDA')
+    const [startDate, setStartDate] = useState('2023-01-01')
+    const [endDate, setEndDate] = useState('2024-03-31')
+    const [stopLossPct, setStopLossPct] = useState(10)
+    const [initialCapital, setInitialCapital] = useState(100000)
+    const [strategyMode, setStrategyMode] = useState('mean-reversion')
 
-    // V21 Pure Strategy Mode (All Shields Off - Manual Clean)
-    const useVixFilter = false
-    const useAlphaShield = false
-    const useRiskParity = false
-    const useCoreTrend = false
-    const useBearSurf = false
-    const useSlopeFilter = false
-    const useGoldenCross = false
-    const useFastSignal = false
-
-    const [selectedTickers, setSelectedTickers] = useState<string[]>([])
+    // 2. States for results
     const [loading, setLoading] = useState(false)
-    const [results, setResults] = useState<BacktestResult | null>(null)
+    const [results, setResults] = useState<any>(null)
+    const [error, setError] = useState<string | null>(null)
 
     const handleRunBacktest = async () => {
         setLoading(true)
+        setError(null)
         try {
-            const res = await runBacktestAction(
-                startDate,
-                endDate,
-                useVixFilter,
-                strategyMode,
-                useSlopeFilter,
-                useGoldenCross,
-                useBearSurf,
-                useAlphaShield,
-                useFastSignal,
-                useRiskParity,
-                useCoreTrend,
-                spatialBuffer,
-                temporalBuffer
-            )
-            setResults(res)
-        } catch (e) {
-            console.error(e)
-            alert("回測失敗，請檢查網路或控制台日誌。")
+            const response = await fetch('/api/backtest/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ticker,
+                    startDate,
+                    endDate,
+                    stopLossPct,
+                    initialCapital,
+                    strategyMode
+                })
+            })
+            
+            const result = await response.json()
+            if (result.success) {
+                setResults(result.data)
+            } else {
+                setError(result.error || "回測計算發生錯誤")
+            }
+        } catch (e: any) {
+            setError("無法連線至回測伺服器")
         } finally {
             setLoading(false)
         }
     }
 
-    const downloadTradesCSV = () => {
-        if (!results || !results.trades) return;
-        const headers = ["Date", "Ticker", "Action", "Price", "Reason", "Current Equity", "Cash Balance", "QQQ Hold Comparison"];
-        const rows = results.trades.map(t => [
-            t.date,
-            t.ticker,
-            t.action,
-            t.price.toFixed(2),
-            `"${t.reason || ''}"`,
-            t.equity?.toFixed(2) || '0.00',
-            t.balance?.toFixed(2) || '0.00',
-            t.qqq?.toFixed(2) || '0.00'
-        ]);
-
-        const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", `backtest_trades_${startDate}_to_${endDate}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    }
-
     return (
-        <main className="min-h-screen bg-slate-950 text-slate-50 flex flex-col relative overflow-hidden">
-            {/* Background Glow */}
-            <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-emerald-500/10 blur-[120px] rounded-full pointer-events-none" />
-            <div className="absolute bottom-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-500/10 blur-[120px] rounded-full pointer-events-none" />
-
-            <header className="z-20 flex items-center justify-between px-8 py-4 border-b border-white/5 backdrop-blur-md bg-slate-950/50 sticky top-0">
+        <main className="min-h-screen bg-[#0a0a0b] text-slate-50 flex flex-col font-sans">
+            {/* Header */}
+            <header className="z-30 flex items-center justify-between px-8 py-4 border-b border-white/5 bg-[#0a0a0b]/80 backdrop-blur-xl sticky top-0">
                 <div className="flex items-center gap-4">
-                    <Link href="/" className="p-2 hover:bg-white/5 rounded-lg transition-colors border border-transparent hover:border-white/10">
-                        <ArrowLeft size={20} />
+                    <Link href="/" className="p-2 hover:bg-white/5 rounded-xl transition-colors border border-white/5">
+                        <ArrowLeft size={18} />
                     </Link>
-                    <div className="h-6 w-px bg-white/10" />
-                    <Link href="/" className="flex items-center gap-2 group">
-                        <div className="bg-emerald-500 p-1.5 rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] group-hover:scale-110 transition-transform">
-                            <TrendingUp size={18} className="text-slate-950" />
+                    <div className="flex items-center gap-2">
+                        <div className="bg-indigo-500 p-1.5 rounded-lg shadow-lg shadow-indigo-500/20">
+                            <BarChart3 size={18} className="text-white" />
                         </div>
-                        <span className="font-bold tracking-tight text-lg">AutoTrade <span className="text-emerald-400 text-sm">PRO</span></span>
-                    </Link>
+                        <h1 className="font-black tracking-tight text-xl uppercase italic">
+                            Backtest <span className="text-indigo-400 not-italic tracking-tighter ml-1">Visualizer</span>
+                        </h1>
+                    </div>
                 </div>
-                <div className="flex items-center gap-6">
-                    <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400 mr-4">
-                        <Link href="/" className="hover:text-white cursor-pointer transition-colors">總覽概況</Link>
-                        <Link href="/engine" className="hover:text-white cursor-pointer transition-colors">交易引擎</Link>
-                        <span className="text-white">回測探險家</span>
-                        <div className="h-4 w-px bg-white/10 mx-2" />
-                        <LogoutButton />
-                    </nav>
+                <div className="flex items-center gap-2 p-1 bg-white/5 rounded-full border border-white/5 px-4 text-[10px] font-bold text-slate-500 tracking-widest uppercase">
+                    <div className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                    Engine Active
                 </div>
             </header>
 
-            <div className="z-10 flex-1 space-y-8 p-8 pt-6 max-w-7xl mx-auto w-full">
-                {/* Header Block */}
-                <div className="mb-2">
-                    <h2 className="text-3xl font-bold tracking-tight mb-1">回測 <span className="text-emerald-400">Backtest Explorer</span></h2>
-                    <p className="text-sm text-slate-400">在安全沙盒中驗證你的量化指標與撤退策略。</p>
-                </div>
+            <div className="grid grid-cols-12 gap-0 flex-1">
+                {/* LEFT CONSOLE (3 units) */}
+                <aside className="col-span-12 lg:col-span-3 border-r border-white/5 bg-[#0d0d0e] p-6 space-y-8 h-full overflow-y-auto">
+                    <div>
+                        <h2 className="text-xs font-black text-indigo-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                            <div className="w-4 h-px bg-indigo-500/50" />
+                            回測控制台
+                        </h2>
+                        
+                        <div className="space-y-6">
+                            {/* Ticker Input */}
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                    <TrendingUp size={12} /> 標的代號 (Ticker)
+                                </label>
+                                <input 
+                                    value={ticker}
+                                    onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                                    placeholder="例如: NVDA, TSLA..."
+                                />
+                            </div>
 
-                {!results ? (
-                    <div className="flex flex-col items-center justify-center py-32 bg-white/5 border border-dashed border-white/10 rounded-3xl opacity-60">
-                        <History size={48} className="text-slate-600 mb-4" />
-                        <p className="text-slate-400 font-medium">尚未執行回測，請設定下方參數並點擊全速回測。</p>
-                    </div>
-                ) : (
-                    <div className="space-y-6">
-                        {/* KPI Cards */}
-                        <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-                            <Card className="bg-white/5 border-white/10 backdrop-blur-md border-b-2 border-b-emerald-500/50">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-sm font-medium text-slate-400">總報酬率 (Total Return)</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="text-3xl font-bold font-mono text-emerald-400">{results.totalReturn.toFixed(2)}%</div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-sm font-medium text-slate-400">年化報酬 (Annualized)</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="text-3xl font-bold font-mono">{results.annualReturn.toFixed(2)}%</div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white/5 border-white/10 backdrop-blur-md border-b-2 border-b-rose-500/50">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-sm font-medium text-slate-400">最大回撤 (Max DD)</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="text-3xl font-bold font-mono text-rose-400">-{results.maxDrawdown.toFixed(2)}%</div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-sm font-medium text-slate-400">夏普比率 (Sharpe)</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="text-3xl font-bold font-mono">{results.sharpeRatio.toFixed(2)}</div>
-                                </CardContent>
-                            </Card>
+                            {/* Date Range */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                        <Calendar size={12} /> 起始日期
+                                    </label>
+                                    <input 
+                                        type="date"
+                                        value={startDate}
+                                        onChange={(e) => setStartDate(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                        <Calendar size={12} /> 結束日期
+                                    </label>
+                                    <input 
+                                        type="date"
+                                        value={endDate}
+                                        onChange={(e) => setEndDate(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Initial Capital */}
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                    <DollarSign size={12} /> 初始資金 (USD)
+                                </label>
+                                <input 
+                                    type="number"
+                                    value={initialCapital}
+                                    onChange={(e) => setInitialCapital(Number(e.target.value))}
+                                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                                />
+                            </div>
+
+                            {/* Stop Loss Slider */}
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                        <ShieldAlert size={12} /> Sentinel 停損 (%)
+                                    </label>
+                                    <span className="text-xs font-mono text-indigo-400 font-bold">{stopLossPct}%</span>
+                                </div>
+                                <input 
+                                    type="range"
+                                    min="1"
+                                    max="50"
+                                    value={stopLossPct}
+                                    onChange={(e) => setStopLossPct(Number(e.target.value))}
+                                    className="w-full accent-indigo-500 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer"
+                                />
+                                <p className="text-[9px] text-slate-500 italic">當股價從高點回落此比例時將觸發保險平倉。</p>
+                            </div>
+
+                            {/* Strategy Mode Select */}
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                                    <History size={12} /> 策略模式
+                                </label>
+                                <select 
+                                    value={strategyMode}
+                                    onChange={(e) => setStrategyMode(e.target.value)}
+                                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:outline-none transition-colors appearance-none"
+                                >
+                                    <option value="mean-reversion">大跌抄底 (Mean Reversion)</option>
+                                    <option value="momentum">強勢突破 (Momentum)</option>
+                                    <option value="tqqq-trend">趨勢跟隨 (TQQQ Trend)</option>
+                                </select>
+                            </div>
+
+                            {/* Run Button */}
+                            <button 
+                                onClick={handleRunBacktest}
+                                disabled={loading}
+                                className={cn(
+                                    "w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 transition-all active:scale-95 shadow-lg",
+                                    loading 
+                                        ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                                        : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20"
+                                )}
+                            >
+                                {loading ? <Loader2 size={18} className="animate-spin" /> : <Play size={16} fill="white" />}
+                                {loading ? '回測運算中...' : '開始歷史回測'}
+                            </button>
                         </div>
+                    </div>
 
-                        <div className="grid gap-6 grid-cols-1 lg:grid-cols-3">
-                            <Card className="lg:col-span-2 bg-white/5 border-white/10 backdrop-blur-md overflow-hidden">
-                                <CardHeader className="flex flex-row items-center justify-between">
-                                    <div>
-                                        <CardTitle>資產淨值成長比例 (Equity Curve)</CardTitle>
-                                        <CardDescription>策略對比標普 500 指數 (SPY) 表現。</CardDescription>
-                                    </div>
-                                    <BarChart3 className="text-emerald-500" />
+                    {error && (
+                        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex gap-2 items-start">
+                            <ShieldAlert size={16} className="shrink-0" />
+                            <span>{error}</span>
+                        </div>
+                    )}
+                </aside>
+
+                {/* MAIN VISUALIZATION (9 units) */}
+                <section className="col-span-12 lg:col-span-9 p-8 bg-[#0a0a0b] relative overflow-y-auto">
+                    {results ? (
+                        <motion.div 
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="space-y-8"
+                        >
+                            {/* Performance Metrics */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <Card className="bg-white/5 border-white/10 border-b-2 border-b-indigo-500/50 backdrop-blur-xl">
+                                    <CardHeader className="pb-2">
+                                        <CardDescription className="text-[9px] uppercase font-bold text-slate-500 tracking-widest">總計報酬率 (Cumulative Return)</CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className={cn(
+                                            "text-3xl font-black font-mono tracking-tighter",
+                                            results.metrics.totalReturn >= 0 ? "text-emerald-400" : "text-rose-400"
+                                        )}>
+                                            {results.metrics.totalReturn >= 0 ? '+' : ''}{results.metrics.totalReturn.toFixed(2)}%
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                                <Card className="bg-white/5 border-white/10 border-b-2 border-b-rose-500/50 backdrop-blur-xl">
+                                    <CardHeader className="pb-2">
+                                        <CardDescription className="text-[9px] uppercase font-bold text-slate-500 tracking-widest">最大回撤 (Max Drawdown)</CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="text-3xl font-black font-mono tracking-tighter text-rose-400">
+                                            -{results.metrics.maxDrawdown.toFixed(2)}%
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                                <Card className="bg-white/5 border-white/10 border-b-2 border-b-sky-500/50 backdrop-blur-xl">
+                                    <CardHeader className="pb-2">
+                                        <CardDescription className="text-[9px] uppercase font-bold text-slate-500 tracking-widest">夏普比率 (Sharpe Ratio)</CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="text-3xl font-black font-mono tracking-tighter text-sky-400">
+                                            {results.metrics.sharpeRatio.toFixed(2)}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            </div>
+
+                            {/* Main Equity Chart */}
+                            <Card className="bg-white/5 border-white/10 backdrop-blur-2xl">
+                                <CardHeader>
+                                    <CardTitle className="text-base font-bold flex items-center gap-2 uppercase tracking-wide italic">
+                                        Equity <span className="text-indigo-400 not-italic tracking-tighter ml-1">Curve</span>
+                                    </CardTitle>
+                                    <CardDescription>策略淨值成長與標普 500 (SPY) 對照圖。</CardDescription>
                                 </CardHeader>
-                                <CardContent className="h-[400px] w-full pt-4">
+                                <CardContent className="h-[500px] w-full pt-4">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={results.equityCurve}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
-                                            <XAxis
-                                                dataKey="date"
-                                                stroke="#475569"
-                                                fontSize={10}
+                                        <LineChart data={results.equityCurve} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                                            <XAxis 
+                                                dataKey="date" 
+                                                stroke="#475569" 
+                                                fontSize={10} 
                                                 tickFormatter={(str) => str.split('-').slice(1).join('/')}
+                                                tickLine={false}
+                                                axisLine={false}
                                             />
-                                            <YAxis
-                                                stroke="#475569"
-                                                fontSize={10}
-                                                tickFormatter={(val) => `\$${(val / 1000).toFixed(0)}k`}
+                                            <YAxis 
+                                                stroke="#475569" 
+                                                fontSize={10} 
+                                                tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
+                                                tickLine={false}
+                                                axisLine={false}
                                             />
-                                            <Tooltip
-                                                contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px' }}
-                                                labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+                                            <Tooltip 
+                                                contentStyle={{ backgroundColor: '#0d0d0e', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px' }}
+                                                itemStyle={{ fontSize: '12px' }}
+                                                labelStyle={{ fontSize: '10px', color: '#64748b', marginBottom: '8px' }}
                                             />
-                                            <Line type="monotone" dataKey="equity" stroke="#10b981" strokeWidth={3} dot={false} name="Strategy Equity" />
-                                            <Line type="monotone" dataKey="qqq" stroke="#3b82f6" strokeWidth={2} strokeDasharray="5 5" dot={false} name="QQQ Hold" />
-                                            <Line type="monotone" dataKey="spy" stroke="#64748b" strokeWidth={2} strokeDasharray="5 5" dot={false} name="SPY Benchmark" />
+                                            <Legend verticalAlign="top" height={36}/>
+                                            <Line 
+                                                type="monotone" 
+                                                dataKey="equity" 
+                                                stroke="#818cf8" 
+                                                strokeWidth={4} 
+                                                dot={false} 
+                                                name="策略淨值 (Strategy)" 
+                                                animationDuration={1500}
+                                            />
+                                            <Line 
+                                                type="monotone" 
+                                                dataKey="spy" 
+                                                stroke="#475569" 
+                                                strokeWidth={2} 
+                                                strokeDasharray="5 5" 
+                                                dot={false} 
+                                                name="標普 500 (SPY Benchmark)" 
+                                            />
                                         </LineChart>
                                     </ResponsiveContainer>
                                 </CardContent>
                             </Card>
 
-                            <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-                                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                                    <CardTitle className="text-base flex items-center gap-2">
-                                        <History size={18} className="text-emerald-500" />
-                                        交易日誌 (Trade Log)
-                                    </CardTitle>
-                                    {results && (
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] text-slate-500 uppercase font-bold">篩選標的:</span>
-                                            <select
-                                                multiple
-                                                value={selectedTickers}
-                                                onChange={(e) => {
-                                                    const values = Array.from(e.target.selectedOptions, option => option.value);
-                                                    setSelectedTickers(values);
-                                                }}
-                                                className="bg-slate-900 text-[10px] border border-white/10 rounded px-1 py-0.5 focus:outline-none text-emerald-400 min-w-[80px]"
-                                            >
-                                                <option value="">全部 (All)</option>
-                                                {Array.from(new Set(results.trades.map(t => t.ticker))).sort().map(t => (
-                                                    <option key={t} value={t}>{t}</option>
-                                                ))}
-                                            </select>
-                                            <button
-                                                onClick={downloadTradesCSV}
-                                                className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold transition-colors border border-emerald-500/20"
-                                            >
-                                                <Download size={12} />
-                                                CSV
-                                            </button>
-                                        </div>
-                                    )}
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="space-y-3 h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                                        {results.trades
-                                            .slice()
-                                            .reverse()
-                                            .filter(trade => selectedTickers.length === 0 || selectedTickers.includes("") || selectedTickers.includes(trade.ticker))
-                                            .map((trade, idx) => (
-                                                <div key={idx} className="flex flex-col gap-1 p-3 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 transition-colors">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-[10px] font-mono text-slate-500">{trade.date}</span>
-                                                        <Badge className={trade.action === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}>
-                                                            {trade.action === 'BUY' ? '買入' : '賣出'}
-                                                        </Badge>
-                                                    </div>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-sm font-bold uppercase">{trade.ticker}</span>
-                                                        <span className="text-sm font-mono text-slate-300">\${trade.price.toFixed(2)}</span>
-                                                    </div>
-                                                    <div className="flex items-center justify-between mt-1 pt-1 border-t border-white/5">
-                                                        <div className="flex flex-col">
-                                                            <span className="text-[8px] text-slate-500 uppercase">帳戶總額 (Equity)</span>
-                                                            <span className="text-[10px] font-mono text-emerald-400 font-bold">\${trade.equity?.toLocaleString() || '--'}</span>
-                                                        </div>
-                                                        <div className="flex flex-col items-end">
-                                                            <span className="text-[8px] text-slate-500 uppercase">剩餘現金 (Cash)</span>
-                                                            <span className="text-[10px] font-mono text-blue-400 font-bold">\${trade.balance?.toLocaleString() || '--'}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex items-center justify-between text-[8px] text-slate-500 uppercase mt-1 px-1 py-0.5 bg-white/5 rounded">
-                                                        <span>QQQ Hold 對比:</span>
-                                                        <span className="font-mono">\${trade.qqq?.toLocaleString() || '--'}</span>
-                                                    </div>
-                                                    {trade.reason && <div className="text-[9px] text-slate-500 italic mt-1">{trade.reason}</div>}
-                                                </div>
-                                            ))}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </div>
-                    </div>
-                )}
-
-                {/* Footer Controls - Minimalist V20 */}
-                <div className="bg-white/5 p-6 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl mt-6">
-                    <div className="flex flex-wrap items-center justify-center gap-8">
-                        <div className="flex flex-col gap-1">
-                            <label className="text-[10px] uppercase font-bold text-slate-500">起始日期</label>
-                            <input
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="bg-transparent text-sm font-mono focus:outline-none"
-                            />
-                        </div>
-                        <div className="h-8 w-px bg-white/10 hidden md:block" />
-                        <div className="flex flex-col gap-1">
-                            <label className="text-[10px] uppercase font-bold text-slate-500">結束日期</label>
-                            <input
-                                type="date"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="bg-transparent text-sm font-mono focus:outline-none"
-                            />
-                        </div>
-                        <div className="h-8 w-px bg-white/10 hidden md:block" />
-
-                        {/* Core Controls */}
-                        <div className="flex flex-wrap items-center justify-center gap-8">
-                            <div className="flex flex-col gap-1 pr-4">
-                                <label className="text-[10px] uppercase font-bold text-slate-500">Strategy Mode</label>
-                                <select
-                                    value={strategyMode}
-                                    onChange={(e) => setStrategyMode(e.target.value as any)}
-                                    className="bg-transparent text-sm font-bold focus:outline-none text-emerald-400 cursor-pointer"
-                                >
-                                    <option value="tqqq-trend">大盤趨勢跟隨 (TQQQ-Trend)</option>
-                                    <option value="mean-reversion">接飛刀 (Mean Rev)</option>
-                                    <option value="momentum">20D 突破 (Momentum)</option>
-                                </select>
+                            <div className="flex items-center gap-2 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 mb-20">
+                                <CheckCircle2 className="text-indigo-400" size={18} />
+                                <p className="text-xs text-slate-400">
+                                    回測完成。共分析 {results.equityCurve.length} 個交易日。這項策略在回測期間展現了 {results.metrics.totalReturn > 0 ? '正向' : '負向'} 的財富累積效應。
+                                </p>
                             </div>
-
-                            <div className="flex flex-col gap-1 px-4 border-l border-white/10">
-                                <label className="text-[10px] uppercase font-bold text-slate-500">Space Buffer %</label>
-                                <input
-                                    type="number"
-                                    step="0.1"
-                                    value={spatialBuffer}
-                                    onChange={(e) => setSpatialBuffer(parseFloat(e.target.value))}
-                                    className="bg-transparent text-sm font-bold focus:outline-none text-emerald-400 w-16"
-                                />
+                        </motion.div>
+                    ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-50">
+                            <div className="p-6 rounded-full bg-white/5 border border-white/10">
+                                <History size={64} className="text-slate-700" />
                             </div>
-
-                            <div className="flex flex-col gap-1 px-4 border-l border-white/10">
-                                <label className="text-[10px] uppercase font-bold text-slate-500">Time Buffer (Days)</label>
-                                <input
-                                    type="number"
-                                    value={temporalBuffer}
-                                    onChange={(e) => setTemporalBuffer(parseInt(e.target.value))}
-                                    className="bg-transparent text-sm font-bold focus:outline-none text-emerald-400 w-16"
-                                />
+                            <div>
+                                <h3 className="text-lg font-bold">尚未啟動演算</h3>
+                                <p className="text-sm text-slate-500 max-w-[280px]">請在左側面板設定參數，啟動沙盒回測以驗證您的交易假設。</p>
                             </div>
                         </div>
-
-                        <button
-                            onClick={handleRunBacktest}
-                            disabled={loading}
-                            className={`flex items-center gap-3 px-8 py-3 rounded-2xl font-bold transition-all ${loading ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 hover:scale-105 shadow-[0_0_20px_rgba(16,185,129,0.4)]'}`}
-                        >
-                            {loading ? <div className="animate-spin h-5 w-5 border-3 border-slate-500 border-t-transparent rounded-full" /> : <Play size={20} fill="currentColor" />}
-                            {loading ? '計算中' : '全速回測'}
-                        </button>
-                    </div>
-                </div>
+                    )}
+                </section>
             </div>
         </main>
     )

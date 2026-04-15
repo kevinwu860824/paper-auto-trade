@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { getSchwabQuotes } from '@/lib/schwabEngine';
+import { createAdminSupabase } from '@/utils/supabase'; // Corrected path
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -41,10 +42,10 @@ export async function GET(request: Request) {
     if (portfolioItems && portfolioItems.length > 0) {
       for (const item of portfolioItems) {
         const currentPrice = flattened[item.ticker];
-        if (!currentPrice) continue;
+        if (!currentPrice || item.ticker === 'CASH') continue;
 
         const highestPrice = Number(item.highest_price || item.average_cost || 0);
-        const stopLossPct = Number(item.stop_loss_pct || 0.1); // Default 10%
+        const stopLossPct = Number(item.stop_loss_pct || 0.1); 
         const threshold = highestPrice * (1 - stopLossPct);
 
         // A. Update defense line if new peak reached
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
         
         // B. Trigger Force Sell if broken threshold
         else if (currentPrice < threshold) {
-          console.log(`[Sentinel] ALERT: ${item.ticker} broke stop-loss! Current: $${currentPrice}, Stop: $${threshold.toFixed(2)}. Initiating force sell...`);
+          console.warn(`[SENTINEL] STOP LOSS TRIGGERED for ${item.ticker}! Current: $${currentPrice}, Stop: $${threshold.toFixed(2)}`);
           
           // Trigger the internal sell API
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -73,9 +74,10 @@ export async function GET(request: Request) {
     return NextResponse.json(flattened);
   } catch (error: any) {
     console.error("[Quotes API] Critical Error:", error.message);
+    const isAuthError = error.message.includes("Token Refresh") || error.message.includes("schwab_access_token") || error.message.includes("Unauthorized");
     return NextResponse.json({ 
       error: 'Failed to fetch Schwab quotes', 
       details: error.message 
-    }, { status: 500 });
+    }, { status: isAuthError ? 401 : 500 });
   }
 }

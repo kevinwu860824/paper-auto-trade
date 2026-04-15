@@ -1,12 +1,26 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabase } from '@/utils/supabase';
+import { createClient } from '@/utils/supabase/server';
 import { getSchwabQuotes } from '@/lib/schwabEngine';
 
 export async function GET(request: Request) {
-  // 1. Security Check (Bearer Token)
+  const { searchParams } = new URL(request.url);
+  const forceAnalyzeAll = searchParams.get('forceAnalyzeAll') === 'true';
+
+  // 1. Security Check (Bearer Token for CRON or User Session for Dashboard)
   const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  let userId: string | null = null;
+
+  if (authHeader === `Bearer ${process.env.CRON_SECRET}`) {
+    // Authorized via Cron Secret
+  } else {
+    // Try authorizing via UI session
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized: Missing CRON_SECRET or valid session.' }, { status: 401 });
+    }
+    userId = user.id;
   }
 
   const adminSupabase = createAdminSupabase();
@@ -25,35 +39,46 @@ export async function GET(request: Request) {
 
     const tickers = watchlist.map(item => item.ticker);
 
-    // 3. Obtain a Valid User ID for Schwab Context (Pick first connected user)
-    // In production, this should ideally be a system admin user.
-    const { data: tokenEntry } = await adminSupabase
-      .from('settings')
-      .select('user_id')
-      .eq('key', 'schwab_access_token')
-      .limit(1)
-      .maybeSingle();
+    // 3. Obtain a Valid User ID for Schwab Context (Pick first connected user if not present)
+    if (!userId) {
+      const { data: tokenEntry } = await adminSupabase
+        .from('settings')
+        .select('user_id')
+        .eq('key', 'schwab_access_token')
+        .limit(1)
+        .maybeSingle();
 
-    if (!tokenEntry) {
-      return NextResponse.json({ error: 'No user with Schwab connection found for market data.' }, { status: 500 });
+      if (!tokenEntry) {
+        return NextResponse.json({ error: 'No user with Schwab connection found for market data.' }, { status: 500 });
+      }
+      userId = tokenEntry.user_id;
     }
-    const userId = tokenEntry.user_id;
 
-    // 4. Multi-Batch Quote Fetch (Schwab limit ~50)
-    const BATCH_SIZE = 40;
-    const candidates: string[] = [];
-    
-    for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-      const batch = tickers.slice(i, i + BATCH_SIZE);
-      const quotes = await getSchwabQuotes(userId, batch);
+    // 4. Determine Candidates
+    let candidates: string[] = [];
 
-      for (const ticker of batch) {
-        const q = quotes[ticker];
-        if (!q || !q.quote) continue;
+    if (forceAnalyzeAll) {
+      // Opt-in: Directly analyze everything in watchlist
+      console.log(`🚀 [Radar API] Force Analyzing ALL: ${tickers.length} tickers.`);
+      candidates = [...tickers];
+    } else {
+      // Default: Only analyze stocks with > 5% drop
+      const BATCH_SIZE = 40;
+      
+      if (!userId) {
+        return NextResponse.json({ error: 'System integrity error: Missing active user context for market check.' }, { status: 500 });
+      }
 
-        // Condition: Daily Drop > 5% (netChangePercent is decimal, e.g. -0.051)
-        if (q.quote.netChangePercent <= -0.05) {
-          candidates.push(ticker);
+      for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+        const batch = tickers.slice(i, i + BATCH_SIZE);
+        const quotes = await getSchwabQuotes(userId, batch);
+
+        for (const ticker of batch) {
+          const q = quotes[ticker];
+          if (!q || !q.quote) continue;
+          if (q.quote.netChangePercent <= -0.05) {
+            candidates.push(ticker);
+          }
         }
       }
     }
@@ -63,16 +88,22 @@ export async function GET(request: Request) {
     }
 
     // 5. Trigger Analysis Tasks & Wake up AI
-    console.log(`📡 [Radar Detected] Critical drops in: ${candidates.join(', ')}`);
+    console.log(`📡 [Radar Detected] Analysis requested for: ${candidates.join(', ')}`);
     
-    const taskInserts = candidates.map(ticker => ({
-      ticker,
-      status: 'pending',
-      user_id: userId // Tagged to the system user
-    }));
+    const taskInserts = candidates.map(ticker => {
+      const item: any = { ticker, status: 'pending' };
+      if (userId) item.user_id = userId;
+      return item;
+    });
 
     const { error: insertError } = await adminSupabase.from('analysis_tasks').insert(taskInserts);
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error("[Radar] Task Insert failed. Attempting fallback without user_id...");
+      // Fallback: Try without user_id if the column doesn't exist yet
+      const fallbackInserts = candidates.map(ticker => ({ ticker, status: 'pending' }));
+      const { error: fallbackError } = await adminSupabase.from('analysis_tasks').insert(fallbackInserts);
+      if (fallbackError) throw fallbackError;
+    }
 
     // 6. Trigger Cloud Run Job (Automated Wakeup)
     // We reuse the existing external trigger logic

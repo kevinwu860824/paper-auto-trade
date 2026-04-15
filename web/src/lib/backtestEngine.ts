@@ -30,8 +30,14 @@ export async function runBacktest(
         useRiskParity = false,
         useCoreTrend = false,
         spatialBuffer = 1.5,
-        temporalBuffer = 2
+        temporalBuffer = 2,
+        stopLossPct = 10, // Default 10%
+        focusTicker = null // Support specific ticker backtest
     } = options;
+    
+    // Determine the working watchlist
+    const activeWatchlist = focusTicker ? [focusTicker.toUpperCase()] : watchlisthigh;
+    const stopLossMultiplier = 1 - (stopLossPct / 100);
     
     const yahooFinance = new (YahooFinance as any)();
     const start = new Date(startDateStr);
@@ -69,8 +75,8 @@ export async function runBacktest(
 
     // 2. Fetch Watchlist
     const stockData: Record<string, Record<string, any>> = {};
-    for (let i = 0; i < watchlisthigh.length; i += 20) {
-        const batch = watchlisthigh.slice(i, i + 20);
+    for (let i = 0; i < activeWatchlist.length; i += 20) {
+        const batch = activeWatchlist.slice(i, i + 20);
         await Promise.all(batch.map(async (ticker) => {
             try {
                 const data = await yahooFinance.chart(ticker, { period1: fetchStart, period2: end, interval: '1d' });
@@ -204,9 +210,9 @@ export async function runBacktest(
                 
                 let shouldSell = false;
                 if (strategyMode === 'mean-reversion') {
-                    if (q.close > q.ma5 || (q.close / stockPositions[t].avgCost) < 0.90) shouldSell = true;
+                    if (q.close > q.ma5 || (q.close / stockPositions[t].avgCost) < stopLossMultiplier) shouldSell = true;
                 } else if (strategyMode === 'momentum') {
-                    if (q.close < stockPositions[t].peak * 0.90) shouldSell = true;
+                    if (q.close < stockPositions[t].peak * stopLossMultiplier) shouldSell = true;
                 }
                 if (!signal.isBull || isPanic) shouldSell = true;
 
@@ -249,7 +255,7 @@ export async function runBacktest(
         // 4. BUY LOGIC (CANDIDATES)
         const candidates = [];
         if (signal.isBull && !isPanic && strategyMode !== 'tqqq-trend') {
-            for (const ticker of watchlisthigh) {
+            for (const ticker of activeWatchlist) {
                 if (stockPositions[ticker]) continue;
                 const q = stockData[ticker]?.[today], tmrw = stockData[ticker]?.[tomorrow];
                 if (q?.ma200 && q?.ma5 && q.close > q.ma200 && q.drops >= 3 && tmrw) {

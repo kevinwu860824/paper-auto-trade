@@ -8,6 +8,14 @@ import { Wallet, TrendingUp, PlayCircle, Loader2, DollarSign, PieChart, ShieldCh
 import { createClient } from '@/utils/supabase/client'
 import { cn } from '@/lib/utils'
 import { motion, AnimatePresence } from 'framer-motion'
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
+import { WatchlistMonitor } from './WatchlistMonitor'
+import { Checkbox } from "@/components/ui/checkbox"
 
 interface PortfolioItem {
   id: string;
@@ -25,61 +33,70 @@ export function PortfolioDashboard() {
   const [quotes, setQuotes] = useState<Record<string, number>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [isAllocating, setIsAllocating] = useState(false)
+  const [analyzeAll, setAnalyzeAll] = useState(false)
   const [schwabConnected, setSchwabConnected] = useState<boolean | null>(null)
   const [showToast, setShowToast] = useState<{message: string, type: 'success' | 'error'} | null>(null)
   const supabase = createClient()
 
   // 1. Fetch Real-time Quotes from our Internal API
-  const fetchQuotes = useCallback(async (items: PortfolioItem[]) => {
-    const tickers = items.map(i => i.ticker).join(',')
-    if (!tickers) return
+  const fetchQuotes = useCallback(async (tickersStr?: string) => {
+    // If no tickers provided and portfolio empty, do a simple auth health check
+    const url = tickersStr 
+      ? `/api/portfolio/quotes?tickers=${tickersStr}`
+      : `/api/watchlist/status` // Fallback to watchlist status as a health check
 
     try {
-      const res = await fetch(`/api/portfolio/quotes?tickers=${tickers}`)
+      const res = await fetch(url)
+      
       if (res.status === 401) {
+        console.warn("[PortfolioDashboard] Schwab session expired (401)")
         setSchwabConnected(false)
         return
       }
-      if (!res.ok) throw new Error("Quotes Fetch Failed")
       
-      const data = await res.json()
-      setQuotes(data)
+      if (!res.ok) throw new Error("Connection Health Check Failed")
+      
+      if (tickersStr) {
+        const data = await res.json()
+        setQuotes(data)
+      }
       setSchwabConnected(true)
     } catch (err) {
-      console.error("[PortfolioDashboard] Schwab Quote Error:", err)
+      console.error("[PortfolioDashboard] Schwab Connectivity Error:", err)
       setSchwabConnected(false)
     }
   }, [])
 
-  // 2. Fetch Portfolio from Supabase
+  // 2. Fetch Portfolio via Privileged API
   const fetchPortfolio = useCallback(async () => {
     setIsLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('portfolio')
-        .select('*')
-        .order('ticker', { ascending: true })
+      const response = await fetch('/api/portfolio')
+      const result = await response.json()
 
-      if (error) throw error
+      if (!result.success) throw new Error(result.error)
       
-      const cashEntry = data.find(item => item.ticker === 'CASH')
-      const stockItems = data.filter(item => item.ticker !== 'CASH') as PortfolioItem[]
+      const data = result.data
+      const cashEntry = data.find((item: any) => item.ticker === 'CASH')
+      const stockItems = data.filter((item: any) => item.ticker !== 'CASH') as PortfolioItem[]
       
-      setCash(cashEntry ? cashEntry.shares : 0)
+      setCash(cashEntry ? Number(cashEntry.shares) : 0)
       setPortfolio(stockItems)
       
-      // Immediately fetch quotes for these stocks
+      // Actively verify connection regardless of stock count
       if (stockItems.length > 0) {
-        fetchQuotes(stockItems)
+        fetchQuotes(stockItems.map(i => i.ticker).join(','))
       } else {
-        setSchwabConnected(true) // If no stocks, assume connected if we reached here
+        // Empty portfolio? Run a health check anyway to ensure "Connected" is true
+        fetchQuotes()
       }
     } catch (err: any) {
       console.error("Failed to fetch portfolio:", err.message)
+      setSchwabConnected(false)
     } finally {
       setIsLoading(false)
     }
-  }, [supabase, fetchQuotes])
+  }, [fetchQuotes])
 
   useEffect(() => {
     fetchPortfolio()
@@ -101,10 +118,32 @@ export function PortfolioDashboard() {
       alert("請先完成 Schwab OAuth 授權連線。")
       return
     }
-    if (!confirm("確定要執行『Schwab 即時建倉演算』嗎？這將使用券商真實報價分配資金。")) return
+
+    const confirmMsg = analyzeAll 
+      ? "🚀 【全量初始化分析】\n確定要喚醒 AI 對名單中所有標的進行重新評分嗎？這通常需要 1-2 分鐘時間產出報告。"
+      : "確定要執行『Schwab 即時建倉演算』嗎？這將使用券商真實報價分配資金。"
+
+    if (!confirm(confirmMsg)) return
     
     setIsAllocating(true)
     try {
+      // MODE A: Full Analysis Trigger ONLY
+      if (analyzeAll) {
+        console.log("[PortfolioDashboard] Triggering Full Analysis via Radar API...");
+        const radarRes = await fetch('/api/cron/radar?forceAnalyzeAll=true')
+        const radarData = await radarRes.json()
+        
+        if (!radarRes.ok) throw new Error(radarData.error || "Radar API Failed")
+        
+        setShowToast({ 
+          message: `診斷任務已全量發射（共 ${radarData.detected?.length || 'N/A'} 檔）。請等待 AI 評級產出後再次執行建倉。`, 
+          type: 'success' 
+        })
+        setAnalyzeAll(false) // Reset checkbox
+        return // STOP HERE - Let AI work
+      }
+
+      // MODE B: Standard Allocation Logic
       const response = await fetch('/api/portfolio/allocate', { method: 'POST' })
       const result = await response.json()
 
@@ -115,24 +154,31 @@ export function PortfolioDashboard() {
         setShowToast({ message: result.message || result.error, type: 'error' })
       }
     } catch (err: any) {
-      setShowToast({ message: "連線 API 失敗，請重試", type: 'error' })
+      console.error("[PortfolioDashboard] Allocation Exec Error:", err)
+      setShowToast({ message: err.message || "連線 API 失敗，請重試", type: 'error' })
     } finally {
       setIsAllocating(false)
-      setTimeout(() => setShowToast(null), 5000)
+      setTimeout(() => setShowToast(null), 8000) // Longer toast for better readability
     }
   }
 
-  // Calculate Aggregated Metrics
+  // Calculate Aggregated Metrics with strict Number casting
+  const hasQuotes = Object.keys(quotes).length > 0;
+  
   const marketValue = portfolio.reduce((acc, item) => {
-    const price = quotes[item.ticker] || item.average_cost
-    return acc + (item.shares * price)
+    // Priority: Live Quote > Average Cost (as fallback)
+    // Mandatory Number() casting for database string fields
+    const price = Number(quotes[item.ticker] || item.average_cost || 0)
+    return acc + (Number(item.shares) * price)
   }, 0)
   
-  const totalValue = marketValue + cash
+  const totalValue = marketValue + Number(cash)
+  const isAumLoading = (isLoading || (portfolio.length > 0 && !hasQuotes)) && totalValue === 0;
+
   const totalPL = portfolio.reduce((acc, item) => {
     const price = quotes[item.ticker]
     if (!price) return acc
-    return acc + ((price - item.average_cost) * item.shares)
+    return acc + ((Number(price) - Number(item.average_cost)) * Number(item.shares))
   }, 0)
 
   return (
@@ -190,8 +236,15 @@ export function PortfolioDashboard() {
           <CardContent className="pt-6">
             <div className="flex flex-col">
               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">總資產估值 (AUM)</span>
-              <span className="text-2xl font-black text-white font-mono">
-                ${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <span className={cn(
+                "text-2xl font-black font-mono",
+                isAumLoading ? "text-slate-500 text-sm animate-pulse" : "text-white"
+              )}>
+                {isAumLoading ? (
+                  "等待報價中..."
+                ) : (
+                  "$" + totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                )}
               </span>
             </div>
           </CardContent>
@@ -202,7 +255,11 @@ export function PortfolioDashboard() {
             <div className="flex flex-col">
               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">可用現金水位</span>
               <span className="text-2xl font-black text-emerald-400 font-mono">
-                ${cash.toLocaleString(undefined, { minimumFractionDigits: 0 })}
+                {isLoading ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  "$" + cash.toLocaleString(undefined, { minimumFractionDigits: 2 })
+                )}
               </span>
             </div>
           </CardContent>
@@ -222,7 +279,20 @@ export function PortfolioDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="bg-slate-900/40 border-indigo-500/20 flex items-center p-4">
+        <Card className="bg-slate-900/60 border-indigo-500/30 flex flex-col justify-center p-4 gap-3 shadow-2xl shadow-indigo-500/10">
+          <div className="flex items-center gap-2 px-1">
+            <Checkbox 
+              id="analyzeAll" 
+              checked={analyzeAll}
+              onChange={(e: any) => setAnalyzeAll(e.target.checked)}
+            />
+            <label 
+              htmlFor="analyzeAll" 
+              className="text-[10px] font-bold text-slate-400 cursor-pointer select-none hover:text-indigo-400 transition-colors"
+            >
+              分析名單內所有標的 (忽略跌幅門檻)
+            </label>
+          </div>
           <button 
             onClick={handleRunAllocation}
             disabled={isAllocating || schwabConnected === false}
@@ -234,98 +304,121 @@ export function PortfolioDashboard() {
         </Card>
       </div>
 
-      <Card className="bg-white/5 border-white/10 backdrop-blur-xl shadow-2xl overflow-hidden border-t-indigo-500/30 border-t-2">
-        <CardHeader className="bg-white/[0.02] border-b border-white/5">
-          <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
-             <PieChart size={16} className="text-indigo-400" /> 持倉明細與即時估值 (Schwab Live)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader className="bg-white/[0.02]">
-              <TableRow className="border-white/5 hover:bg-transparent">
-                <TableHead className="text-slate-500 font-black text-[10px] uppercase">Ticker</TableHead>
-                <TableHead className="text-slate-500 font-black text-[10px] uppercase">Tier</TableHead>
-                <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">股數</TableHead>
-                <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">平均成本</TableHead>
-                <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">Schwab 現價</TableHead>
-                <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">防禦狀態 (Stop Loss)</TableHead>
-                <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">未實現損益</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-400" />
-                  </TableCell>
-                </TableRow>
-              ) : portfolio.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center text-slate-500 italic">
-                    尚未建倉，等待 AI 訊號發射後啟動演算。
-                  </TableCell>
-                </TableRow>
-              ) : (
-                portfolio.map((item) => {
-                  const livePrice = quotes[item.ticker]
-                  const pl = livePrice ? (livePrice - item.average_cost) * item.shares : 0
-                  
-                  return (
-                    <TableRow key={item.id} className="border-white/5 hover:bg-white/[0.02] transition-colors group">
-                      <TableCell className="font-mono font-black text-white text-base group-hover:text-indigo-400 transition-colors uppercase">
-                        {item.ticker}
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={cn(
-                          "font-black text-[9px] px-1.5 py-0 border-none",
-                          item.tier === 'S' && "bg-indigo-500/20 text-indigo-400",
-                          item.tier === 'A' && "bg-emerald-500/20 text-emerald-400",
-                          item.tier === 'B' && "bg-amber-500/20 text-amber-400"
-                        )}>
-                          {item.tier}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-slate-300">{item.shares}</TableCell>
-                      <TableCell className="text-right font-mono text-slate-400">${item.average_cost.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-mono text-white font-bold">
-                        {livePrice ? `$${livePrice.toFixed(2)}` : '--'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {item.highest_price ? (
-                          <div className="flex flex-col items-end gap-1">
-                            <span className={cn(
-                              "text-[11px] font-mono font-bold",
-                              livePrice && livePrice < (item.highest_price * (1 - (item.stop_loss_pct || 0.1))) * 1.02 
-                                ? "text-orange-400 animate-pulse" 
-                                : "text-slate-400"
-                            )}>
-                              ${(item.highest_price * (1 - (item.stop_loss_pct || 0.1))).toFixed(2)}
-                            </span>
-                            <div className="w-16 h-1 bg-white/5 rounded-full overflow-hidden">
-                              <motion.div 
-                                className="h-full bg-indigo-500"
-                                initial={{ width: 0 }}
-                                animate={{ width: `${Math.min(100, (livePrice || 0) / (item.highest_price * (1 - (item.stop_loss_pct || 0.1))) * 50)}%` }}
-                              />
-                            </div>
-                          </div>
-                        ) : '--'}
-                      </TableCell>
-                      <TableCell className={cn(
-                        "text-right font-mono font-black",
-                        pl >= 0 ? "text-emerald-400" : "text-rose-400"
-                      )}>
-                        {pl >= 0 ? '+' : ''}{pl.toFixed(2)}
+      <Tabs defaultValue="positions" className="space-y-6">
+        <TabsList className="bg-white/5 border border-white/10 p-1 rounded-xl">
+          <TabsTrigger 
+            value="positions" 
+            className="rounded-lg px-6 py-2 text-xs font-bold data-[state=active]:bg-indigo-600 data-[state=active]:text-white transition-all"
+          >
+            實時持倉 (Live Positions)
+          </TabsTrigger>
+          <TabsTrigger 
+            value="watchlist" 
+            className="rounded-lg px-6 py-2 text-xs font-bold data-[state=active]:bg-indigo-600 data-[state=active]:text-white transition-all"
+          >
+            名單監控 (Watchlist)
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="positions" className="space-y-6 mt-0">
+          <Card className="bg-white/5 border-white/10 backdrop-blur-xl shadow-2xl overflow-hidden border-t-indigo-500/30 border-t-2">
+            <CardHeader className="bg-white/[0.02] border-b border-white/5">
+              <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+                 <PieChart size={16} className="text-indigo-400" /> 持倉明細與即時估值 (Schwab Live)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader className="bg-white/[0.02]">
+                  <TableRow className="border-white/5 hover:bg-transparent">
+                    <TableHead className="text-slate-500 font-black text-[10px] uppercase">Ticker</TableHead>
+                    <TableHead className="text-slate-500 font-black text-[10px] uppercase">Tier</TableHead>
+                    <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">股數</TableHead>
+                    <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">平均成本</TableHead>
+                    <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">Schwab 現價</TableHead>
+                    <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">防禦狀態 (Stop Loss)</TableHead>
+                    <TableHead className="text-right text-slate-500 font-black text-[10px] uppercase">未實現損益</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-24 text-center">
+                        <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-400" />
                       </TableCell>
                     </TableRow>
-                  )
-                })
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                  ) : portfolio.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-32 text-center text-slate-500 italic">
+                        尚未建倉，等待 AI 訊號發射後啟動演算。
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    portfolio.map((item) => {
+                      const livePrice = quotes[item.ticker]
+                      const pl = livePrice ? (livePrice - Number(item.average_cost)) * Number(item.shares) : 0
+                      
+                      return (
+                        <TableRow key={item.id} className="border-white/5 hover:bg-white/[0.02] transition-colors group">
+                          <TableCell className="font-mono font-black text-white text-base group-hover:text-indigo-400 transition-colors uppercase">
+                            {item.ticker}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={cn(
+                              "font-black text-[9px] px-1.5 py-0 border-none",
+                              item.tier === 'S' && "bg-indigo-500/20 text-indigo-400",
+                              item.tier === 'A' && "bg-emerald-500/20 text-emerald-400",
+                              item.tier === 'B' && "bg-amber-500/20 text-amber-400"
+                            )}>
+                              {item.tier}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-slate-300">{item.shares}</TableCell>
+                          <TableCell className="text-right font-mono text-slate-400">${Number(item.average_cost).toFixed(2)}</TableCell>
+                          <TableCell className="text-right font-mono text-white font-bold">
+                            {livePrice ? `$${livePrice.toFixed(2)}` : '--'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {item.highest_price ? (
+                              <div className="flex flex-col items-end gap-1">
+                                <span className={cn(
+                                  "text-[11px] font-mono font-bold",
+                                  livePrice && livePrice < (item.highest_price * (1 - (item.stop_loss_pct || 0.1))) * 1.02 
+                                    ? "text-orange-400 animate-pulse" 
+                                    : "text-slate-400"
+                                )}>
+                                  ${(item.highest_price * (1 - (item.stop_loss_pct || 0.1))).toFixed(2)}
+                                </span>
+                                <div className="w-16 h-1 bg-white/5 rounded-full overflow-hidden">
+                                  <motion.div 
+                                    className="h-full bg-indigo-500"
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${Math.min(100, (livePrice || 0) / (item.highest_price * (1 - (item.stop_loss_pct || 0.1))) * 50)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ) : '--'}
+                          </TableCell>
+                          <TableCell className={cn(
+                            "text-right font-mono font-black",
+                            pl >= 0 ? "text-emerald-400" : "text-rose-400"
+                          )}>
+                            {pl >= 0 ? '+' : ''}{pl.toFixed(2)}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="watchlist" className="mt-0">
+          <WatchlistMonitor />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
