@@ -1,368 +1,214 @@
 'use client'
 
-import React, { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import React, { useState, useEffect } from 'react'
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Brain, ChevronDown, ChevronUp, Clock, Target, X, Maximize2 } from "lucide-react"
+import { Brain, ChevronDown, ChevronUp, Clock, Target, Check, X as CloseIcon, Info } from "lucide-react"
+import { createClient } from '@/utils/supabase/client'
 import { cn } from "@/lib/utils"
-
-export interface AnalystSignal {
-  signal: string;
-  confidence: number;
-  reasoning: string;
-}
+import { updateSignalStatus, getPendingSignals } from '@/app/actions/signals'
 
 export interface TradeSignal {
   id: string;
   ticker: string;
-  action: 'BUY' | 'SELL' | 'HOLD';
+  action: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   quantity: number;
   reasoning: string;
   created_at: string;
   composite_score?: number;
-  analyst_data?: Record<string, AnalystSignal>;
+  status: 'PENDING' | 'EXECUTED' | 'REJECTED';
 }
 
-const AGENT_NAMES: Record<string, string> = {
-  "technical_analyst_agent": "技術分析專家",
-  "fundamentals_analyst_agent": "基本面大師",
-  "valuation_analyst_agent": "價值估值專家",
-  "sentiment_analyst_agent": "市場情緒分析",
-  "warren_buffett_agent": "巴菲特模擬思維",
-  "michael_burry_agent": "Michael Burry (DNA 狙擊器)",
-  "news_sentiment_agent": "新聞否決與情緒監控",
-  "trend_checker_agent": "48h 趨勢修復引擎",
-  "risk_management_agent": "風險控管專家"
-};
+export function TradeSignals() {
+  const [signals, setSignals] = useState<TradeSignal[]>([])
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const supabase = createClient()
 
-const ScoreGauge = ({ score = 50 }: { score?: number }) => {
-  const safeScore = Math.max(0, Math.min(100, typeof score === 'number' ? score : 50));
-  
-  const getColor = (s: number) => {
-    if (s >= 80) return "text-emerald-500 stroke-emerald-500";
-    if (s >= 60) return "text-emerald-400 stroke-emerald-400";
-    if (s >= 40) return "text-amber-400 stroke-amber-400";
-    if (s >= 20) return "text-orange-400 stroke-orange-400";
-    return "text-rose-500 stroke-rose-500";
-  };
+  useEffect(() => {
+    const fetchSignals = async () => {
+      setIsLoading(true)
+      try {
+        const result = await getPendingSignals()
+        
+        if (!result.success) {
+          console.error("[TradeSignals] Server Fetch Error:", result.error)
+        } else if (result.data) {
+          setSignals(result.data as TradeSignal[])
+        }
+      } catch (err) {
+        console.error("[TradeSignals] Critical fetch error:", err)
+      } finally {
+        setIsLoading(false)
+      }
+    }
 
-  const radius = 18;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (safeScore / 100) * circumference;
+    fetchSignals()
 
-  const colorClass = getColor(safeScore);
-  const textClass = colorClass.split(' ')[0];
+    // Real-time subscription for new signals
+    const channel = supabase
+      .channel('trade_signals_pending')
+      .on('postgres_changes', 
+        { event: '*', table: 'trade_signals', schema: 'public', filter: 'status=eq.PENDING' }, 
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setSignals(prev => [payload.new as TradeSignal, ...prev])
+          } else if (payload.eventType === 'UPDATE' || payload.eventType === 'DELETE') {
+            const record = payload.new as TradeSignal || payload.old as TradeSignal
+            if (record.status !== 'PENDING') {
+              setSignals(prev => prev.filter(s => s.id !== record.id))
+            } else {
+              setSignals(prev => prev.map(s => s.id === record.id ? record : s))
+            }
+          }
+        }
+      )
+      .subscribe()
 
-  return (
-    <div className="relative inline-flex items-center justify-center">
-      <svg className="h-10 w-10 transform -rotate-90">
-        <circle
-          className="text-white/10"
-          strokeWidth="3"
-          stroke="currentColor"
-          fill="transparent"
-          r={radius}
-          cx="20"
-          cy="20"
-        />
-        <circle
-          className={cn("transition-all duration-1000 ease-out", colorClass)}
-          strokeWidth="3"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          stroke="currentColor"
-          fill="transparent"
-          r={radius}
-          cx="20"
-          cy="20"
-        />
-      </svg>
-      <span className={cn("absolute text-[10px] font-bold font-mono", textClass)}>
-        {safeScore}
-      </span>
-    </div>
-  );
-};
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [supabase])
 
-export function TradeSignals({ signals = [] }: { signals?: TradeSignal[] }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [selectedAnalyst, setSelectedAnalyst] = useState<{agent: string, data: AnalystSignal} | null>(null);
-
-  const toggleExpand = (id: string) => {
-    setExpandedId(expandedId === id ? null : id);
-  };
-
-  const safeSignals = Array.isArray(signals) ? signals : [];
+  const handleUpdateStatus = async (id: string, newStatus: 'EXECUTED' | 'REJECTED') => {
+    try {
+      const result = await updateSignalStatus(id, newStatus)
+      if (!result.success) {
+        console.error(`Failed to update signal ${id}:`, result.error)
+        alert(`狀態更新失敗: ${result.error}`)
+      }
+    } catch (e: any) {
+      console.error(`Error updating signal status:`, e)
+      alert("系統回應異常，請稍後再試")
+    }
+    // Real-time listener will handle local state update
+  }
 
   return (
-    <div className="relative">
-      {/* Analyst Modal / Pop-out card */}
-      {selectedAnalyst && (
-        <div 
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setSelectedAnalyst(null)}
-        >
-          <div 
-            className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-6 border-b border-white/5 bg-white/5">
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1">專家分析報告</span>
-                <h3 className="text-xl font-bold text-white">
-                  {AGENT_NAMES[selectedAnalyst.agent] || selectedAnalyst.agent.replace('_agent', '').replace(/_/g, ' ')}
-                </h3>
-              </div>
-              <button 
-                onClick={() => setSelectedAnalyst(null)}
-                className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+    <Card className="bg-white/5 border-white/10 backdrop-blur-xl shadow-2xl overflow-hidden min-h-[400px]">
+      <CardHeader className="border-b border-white/5 bg-white/5 flex flex-row items-center justify-between py-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-emerald-500/20">
+            <Brain className="h-5 w-5 text-emerald-400 fill-emerald-400/20" />
+          </div>
+          <CardTitle className="text-xl font-bold tracking-tight text-white">AI 決策診斷看板</CardTitle>
+        </div>
+        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] font-black uppercase tracking-widest">
+           {signals.length} Pending
+        </Badge>
+      </CardHeader>
+      
+      <CardContent className="p-0 scroll-smooth">
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-500">
+             <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
+             <span className="text-sm font-medium">正在同步雲端策略...</span>
+          </div>
+        ) : signals.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-4 text-slate-500 px-6 text-center">
+             <div className="p-4 rounded-full bg-white/5">
+                <Info size={32} className="text-slate-600" />
+             </div>
+             <div>
+                <p className="text-sm font-bold text-slate-300">暫時無即時信號</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-[200px]">請確保發射台已啟動，或等待市場情緒觸發 Black Swan 監控。</p>
+             </div>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {signals.map((signal) => (
+              <div 
+                key={signal.id} 
+                className={cn(
+                  "transition-all duration-300 group",
+                  expandedId === signal.id ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
+                )}
               >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-slate-500 font-bold uppercase mb-1">評估號誌</span>
-                  <Badge variant="outline" className={cn(
-                    "text-xs font-bold px-3 py-1 border-white/10 w-fit",
-                    (selectedAnalyst.data.signal || '').toLowerCase() === 'bullish' ? "text-emerald-400 bg-emerald-500/10" : 
-                    (selectedAnalyst.data.signal || '').toLowerCase() === 'bearish' ? "text-rose-400 bg-rose-500/10" : "text-amber-400 bg-amber-500/10"
-                  )}>
-                    {(selectedAnalyst.data.signal || 'N/A').toUpperCase()}
-                  </Badge>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-slate-500 font-bold uppercase mb-1">分析信心度</span>
-                  <span className="text-lg font-mono font-bold text-white">{selectedAnalyst.data.confidence}%</span>
-                </div>
-              </div>
-
-              {/* sniper diagnosis metrics */}
-              {(selectedAnalyst.agent === 'michael_burry_agent' || selectedAnalyst.agent === 'news_sentiment_agent' || selectedAnalyst.agent === 'trend_checker_agent') && (
-                <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 space-y-3">
-                  <h4 className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Sniper 狙擊診斷指標</h4>
-                  <div className="grid grid-cols-1 gap-3">
-                    {/* similarity for burry */}
-                    {selectedAnalyst.data.historical_similarity_score !== undefined && (
-                      <div className="flex flex-col gap-1">
-                        <div className="flex justify-between items-center text-[10px]">
-                          <span className="text-slate-400">大師分析：10 年歷史相似度</span>
-                          <span className="text-emerald-400 font-mono font-bold">{Math.round(selectedAnalyst.data.historical_similarity_score * 100)}%</span>
-                        </div>
-                        <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-emerald-500 transition-all duration-1000" 
-                            style={{ width: `${selectedAnalyst.data.historical_similarity_score * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* internal flaw for news */}
-                    {selectedAnalyst.data.reasoning_type && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-slate-400">消息類型分析</span>
-                        <Badge variant="outline" className={cn(
-                           "text-[10px] py-0 px-2",
-                           selectedAnalyst.data.is_internal_flaw ? "border-rose-500/50 text-rose-400 bg-rose-500/10" : "border-emerald-500/50 text-emerald-400 bg-emerald-500/10"
+                {/* Header Section */}
+                <div 
+                  className="flex items-center justify-between p-5 cursor-pointer"
+                  onClick={() => setExpandedId(expandedId === signal.id ? null : signal.id)}
+                >
+                  <div className="flex items-center gap-6">
+                     <div className="flex flex-col items-center justify-center p-2 rounded-xl bg-black/40 border border-white/10 min-w-[70px]">
+                        <span className="text-[10px] text-slate-500 font-black uppercase tracking-tighter">SCORE</span>
+                        <span className={cn(
+                          "text-lg font-black font-mono",
+                          (signal.composite_score || 0) >= 80 ? "text-emerald-400" : 
+                          (signal.composite_score || 0) >= 60 ? "text-amber-400" : "text-rose-400"
                         )}>
-                          {selectedAnalyst.data.reasoning_type.toUpperCase()} 
-                          {selectedAnalyst.data.is_internal_flaw ? " (核心地雷 VETO)" : " (市場恐慌)"}
-                        </Badge>
-                      </div>
-                    )}
-
-                    {/* trend confirmed */}
-                    {selectedAnalyst.data.confirmed !== undefined && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-slate-400">48h MA5 趨勢狀態</span>
-                        <Badge variant="outline" className={cn(
-                           "text-[10px] py-0 px-2",
-                           selectedAnalyst.data.confirmed ? "border-emerald-400 text-emerald-400 bg-emerald-500/10" : "border-amber-400 text-amber-400 bg-amber-500/10"
-                        )}>
-                          {selectedAnalyst.data.confirmed ? "已站穩 MA5 (可加碼)" : "尚未脫離回撤 (觀望)"}
-                        </Badge>
-                      </div>
-                    )}
+                          {signal.composite_score || '--'}
+                        </span>
+                     </div>
+                     
+                     <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                           <Target size={14} className="text-slate-500" />
+                           <span className="text-lg font-black text-white uppercase tracking-tight">{signal.ticker}</span>
+                           <Badge className={cn(
+                             "text-[10px] font-black px-2 py-0 border-none",
+                             signal.action === 'BULLISH' && "bg-emerald-500/20 text-emerald-400",
+                             signal.action === 'BEARISH' && "bg-rose-500/20 text-rose-400",
+                             signal.action === 'NEUTRAL' && "bg-slate-500/20 text-slate-400"
+                           )}>
+                             {signal.action}
+                           </Badge>
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                           <Clock size={10} />
+                           <span>{new Date(signal.created_at).toLocaleString()}</span>
+                        </div>
+                     </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === signal.id ? null : signal.id); }}
+                      className="p-2 rounded-lg hover:bg-white/10 text-slate-500 transition-colors"
+                    >
+                      {expandedId === signal.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                    </button>
                   </div>
                 </div>
-              )}
 
-              <div className="space-y-3">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">詳細推論摘要 (Reasoning)</span>
-                <div className="text-sm text-slate-300 leading-relaxed bg-white/5 p-5 rounded-xl border border-white/5 italic">
-                  {selectedAnalyst.data.reasoning ? (typeof selectedAnalyst.data.reasoning === 'object' ? JSON.stringify(selectedAnalyst.data.reasoning, null, 2) : selectedAnalyst.data.reasoning) : "尚無詳細推論摘要"}
-                </div>
-              </div>
-            </div>
-            <div className="p-4 bg-black/20 border-t border-white/5 text-center">
-              <p className="text-[10px] text-slate-500">此報告由 AI 多代理系統自動生成，僅供參考。</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <Card className="bg-white/5 border-white/10 backdrop-blur-md mb-6 overflow-hidden">
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-lg font-bold flex items-center gap-2">
-            <Brain className="h-5 w-5 text-emerald-400" />
-            AI 決策指揮中心 (最新信號)
-          </CardTitle>
-          <Badge variant="outline" className="text-[10px] border-emerald-500/20 text-emerald-400">
-            即時數據
-          </Badge>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead>
-                <tr className="border-b border-white/10 text-slate-500 uppercase text-[10px] font-bold tracking-widest">
-                  <th className="px-6 py-3">分析時間</th>
-                  <th className="px-6 py-3">股票代號</th>
-                  <th className="px-6 py-3">AI 評分</th>
-                  <th className="px-6 py-3">建議動作</th>
-                  <th className="px-6 py-3">交易數量</th>
-                  <th className="px-6 py-3 text-right">詳情</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {safeSignals.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-10 text-center text-slate-500 italic">
-                      目前尚無 AI 交易信號，請等待系統運行。
-                    </td>
-                  </tr>
-                ) : (
-                  safeSignals.map((signal) => {
-                    if (!signal || !signal.id) return null;
+                {/* Collapsible Content */}
+                {expandedId === signal.id && (
+                  <div className="p-6 pt-0 space-y-4 animate-in fade-in duration-300">
+                    <div className="p-4 rounded-xl bg-black/40 border border-white/5 space-y-3">
+                       <h4 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                          <Check className="h-3 w-3" /> AI 診斷報告 (Diagnostic Report)
+                       </h4>
+                       <div className="text-sm text-slate-300 leading-relaxed font-light whitespace-pre-wrap italic pl-4 border-l-2 border-indigo-500/30">
+                          {signal.reasoning}
+                       </div>
+                    </div>
                     
-                    const dateStr = signal.created_at ? new Date(signal.created_at).toLocaleString('zh-TW', { 
-                      month: 'numeric', 
-                      day: 'numeric', 
-                      hour: '2-digit', 
-                      minute: '2-digit' 
-                    }) : '---';
-
-                    return (
-                      <React.Fragment key={signal.id}>
-                        <tr 
-                          className={cn(
-                            "hover:bg-white/5 transition-colors cursor-pointer group",
-                            expandedId === signal.id && "bg-white/5"
-                          )}
-                          onClick={() => toggleExpand(signal.id)}
-                        >
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2 text-slate-400">
-                              <Clock size={12} />
-                              <span className="text-xs font-mono">{dateStr}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <Target size={14} className="text-slate-500" />
-                              <span className="font-bold text-white uppercase">{signal.ticker || '---'}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <ScoreGauge score={signal.composite_score} />
-                          </td>
-                          <td className="px-6 py-4">
-                            <Badge 
-                              className={cn(
-                                "font-bold text-[10px] px-2 py-0.5",
-                                signal.action === 'BUY' && "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-                                signal.action === 'SELL' && "bg-rose-500/20 text-rose-400 border-rose-500/30",
-                                signal.action === 'HOLD' && "bg-amber-500/20 text-amber-400 border-amber-500/30",
-                              )}
-                              variant="outline"
-                            >
-                              {signal.action === 'BUY' ? '買入 (BUY)' : signal.action === 'SELL' ? '賣出 (SELL)' : '觀望 (HOLD)'}
-                            </Badge>
-                          </td>
-                          <td className="px-6 py-4 text-slate-300 font-mono">
-                            {signal.quantity > 0 ? `${signal.quantity} 股` : '--'}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            {expandedId === signal.id ? (
-                              <ChevronUp size={16} className="text-slate-500 inline" />
-                            ) : (
-                              <ChevronDown size={16} className="text-slate-500 inline" />
-                            )}
-                          </td>
-                        </tr>
-                        {expandedId === signal.id && (
-                          <tr className="bg-black/40">
-                            <td colSpan={6} className="px-6 py-6 ring-1 ring-white/5">
-                              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                <div className="md:col-span-1 space-y-4">
-                                  <div className="p-4 rounded-xl bg-white/5 border border-white/10">
-                                    <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">綜合分析結論</h4>
-                                    <p className="text-xs text-slate-300 leading-relaxed italic border-l-2 border-emerald-500/50 pl-3">
-                                      {signal.reasoning || "尚無總結推論。"}
-                                    </p>
-                                  </div>
-                                </div>
-                                
-                                <div className="md:col-span-3">
-                                  <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">各領域專家報告 (詳細資訊)</h4>
-                                  {signal.analyst_data && typeof signal.analyst_data === 'object' && signal.analyst_data !== null && Object.keys(signal.analyst_data).length > 0 ? (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                      {Object.entries(signal.analyst_data).map(([agent, data]) => {
-                                        if (!data || typeof data !== 'object' || data === null) return null;
-                                        const sigType = (data.signal || '').toLowerCase();
-                                        return (
-                                          <div 
-                                            key={agent} 
-                                            className="p-3 rounded-lg bg-white/5 border border-white/10 hover:border-emerald-500/30 hover:bg-white/10 transition-all cursor-pointer group/card relative"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setSelectedAnalyst({agent, data});
-                                            }}
-                                          >
-                                            <div className="absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 transition-opacity">
-                                              <Maximize2 size={12} className="text-emerald-400" />
-                                            </div>
-                                            <div className="flex items-center justify-between mb-2">
-                                              <span className="text-[10px] font-bold text-emerald-400 uppercase truncate max-w-[120px]">
-                                                {AGENT_NAMES[agent] || agent.replace('_agent', '').replace(/_/g, ' ')}
-                                              </span>
-                                              <Badge variant="outline" className={cn(
-                                                "text-[10px] py-0 px-1 border-white/10",
-                                                sigType === 'bullish' ? "text-emerald-400" : 
-                                                sigType === 'bearish' ? "text-rose-400" : "text-amber-400"
-                                              )}>
-                                                {(data?.signal || 'N/A').toUpperCase()} ({data?.confidence ?? 0}%)
-                                              </Badge>
-                                            </div>
-                                            <p className="text-[11px] text-slate-400 leading-snug line-clamp-3">
-                                              {data?.reasoning ? (typeof data.reasoning === 'object' ? JSON.stringify(data.reasoning) : data.reasoning) : "尚無詳細推論摘要"}
-                                            </p>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  ) : (
-                                    <div className="p-10 text-center border border-dashed border-white/10 rounded-xl">
-                                      <p className="text-xs text-slate-500 italic">舊有紀錄尚未生成詳細專家報告，新運行的分析將會顯示於此。</p>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })
+                    <div className="flex items-center gap-3 pt-2">
+                       <button 
+                         onClick={() => handleUpdateStatus(signal.id, 'EXECUTED')}
+                         className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 text-sm transition-all hover:scale-[1.02] active:scale-95 shadow-lg shadow-emerald-500/20"
+                       >
+                          <Check size={18} /> 批准執行 (Approve)
+                       </button>
+                       <button 
+                         onClick={() => handleUpdateStatus(signal.id, 'REJECTED')}
+                         className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/5 hover:bg-rose-500/20 border border-white/10 hover:border-rose-500/30 text-slate-400 hover:text-rose-400 font-bold py-3 px-6 text-sm transition-all active:scale-95"
+                       >
+                          <CloseIcon size={18} /> 駁回 (Reject)
+                       </button>
+                    </div>
+                  </div>
                 )}
-              </tbody>
-            </table>
+              </div>
+            ))}
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        )}
+      </CardContent>
+    </Card>
   )
+}
+
+// Fallback Loader
+function Loader2({ className }: { className?: string }) {
+  return <div className={cn("animate-spin border-2 border-t-transparent rounded-full", className)} />
 }

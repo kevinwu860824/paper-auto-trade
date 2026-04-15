@@ -183,10 +183,8 @@ export default async function Dashboard() {
       </header>
 
       <div className="z-10 flex-1 space-y-8 p-8 pt-6 max-w-7xl mx-auto w-full">
-        <AIPanel initialTickers={aiTickers} userId={user.id} />
-
         <div className="flex items-center justify-between">
-          <h2 className="text-3xl font-bold tracking-tight">投資組合 <span className="text-slate-500 font-light underline decoration-emerald-500/30">戰情室</span></h2>
+          <h2 className="text-3xl font-bold tracking-tight text-white italic">Black Swan <span className="font-light text-slate-500">Sniper War Room</span></h2>
           <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-full border border-white/10">
             <Globe className="text-slate-400" size={14} />
             <span className="text-xs font-mono text-slate-300">SPY Index: <span className={spyChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}>${spyPrice?.toFixed(2)} ({spyChange?.toFixed(2)}%)</span></span>
@@ -195,92 +193,106 @@ export default async function Dashboard() {
 
         <Tabs defaultValue="sim" className="space-y-6">
           <TabsList className="bg-white/5 border border-white/10 p-1 rounded-xl">
-            <TabsTrigger value="sim" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6">模擬帳戶 (Simulation)</TabsTrigger>
-            <TabsTrigger value="real" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6">真實帳戶 (Charles Schwab)</TabsTrigger>
+            <TabsTrigger value="sim" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6 font-bold">模擬戰場 (Simulation)</TabsTrigger>
+            <TabsTrigger value="real" className="data-[state=active]:bg-emerald-500 data-[state=active]:text-white rounded-lg px-6 font-bold">Charles Schwab (Real)</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="sim" className="space-y-6">
+          <TabsContent value="sim" className="space-y-8">
+            {/* Simulation Stats Overview */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <Card className="bg-white/5 border-white/10 backdrop-blur-md">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-400">模擬總資產 (Total Equity)</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">模擬總資產 (Equity)</CardTitle>
                   <Wallet className="h-4 w-4 text-emerald-400" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">${(simEquity || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                  <div className="text-2xl font-black font-mono text-white">${(simEquity || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                 </CardContent>
               </Card>
               <Card className="bg-white/5 border-white/10 backdrop-blur-md">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-400">可用現金 (Free Cash)</CardTitle>
-                  <LayoutDashboard className="h-4 w-4 text-emerald-400" />
+                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">可用現金 (Free Cash)</CardTitle>
+                  <LayoutDashboard className="h-4 w-4 text-indigo-400" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">${(cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                  <div className="text-2xl font-black font-mono text-white">${(cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                 </CardContent>
               </Card>
               <Card className="bg-white/5 border-white/10 backdrop-blur-md">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-400">持倉總數 (Positions)</CardTitle>
+                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">持倉總數 (Positions)</CardTitle>
                   <Briefcase className="h-4 w-4 text-emerald-400" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">{enrichedPositions.length} 檔標的</div>
+                  <div className="text-2xl font-black font-mono text-white">{enrichedPositions.length} <span className="text-xs font-normal text-slate-500">TICKERS</span></div>
                 </CardContent>
               </Card>
               <Card className="bg-white/5 border-white/10 backdrop-blur-md">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-400">系統狀態 (Auto Mode)</CardTitle>
-                  <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                  <CardTitle className="text-xs font-bold text-slate-500 uppercase tracking-widest">系統狀態</CardTitle>
+                  <ShieldCheck className="h-4 w-4 text-emerald-400 animate-pulse" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-emerald-400">智慧守護中</div>
+                  <div className="text-xl font-black text-emerald-400">🧠 智慧守護中</div>
                 </CardContent>
               </Card>
             </div>
 
-            <TradeSignals signals={aiSignals} />
+            {/* War Room Layout GRID */}
+            <div className="grid grid-cols-12 gap-8">
+              {/* Left Column: Sniper Launchpad */}
+              <div className="col-span-12 lg:col-span-4 space-y-6">
+                <AIPanel />
+              </div>
 
-            <Card className="bg-white/5 border-white/10 backdrop-blur-md">
-              <CardHeader>
-                <CardTitle>模擬持倉明細 (Simulated Positions)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead>
-                      <tr className="border-b border-white/10 text-slate-500 uppercase text-[10px] font-bold tracking-widest">
-                        <th className="px-4 py-3">股票代碼 (Ticker)</th>
-                        <th className="px-4 py-3">股數 (Qty)</th>
-                        <th className="px-4 py-3">平均成本 (Avg)</th>
-                        <th className="px-4 py-3">目前價格 (Price)</th>
-                        <th className="px-4 py-3">預估盈虧 (P/L %)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {enrichedPositions.map((pos) => (
-                        <tr key={pos.ticker} className="hover:bg-white/5 transition-colors group">
-                          <td className="px-4 py-4 font-bold text-white group-hover:text-emerald-400 transition-colors uppercase">{pos.ticker}</td>
-                          <td className="px-4 py-4 text-slate-300 font-mono">{pos.shares}</td>
-                          <td className="px-4 py-4 text-slate-300 font-mono">${Number(pos.avgCost || 0).toFixed(2)}</td>
-                          <td className="px-4 py-4 text-slate-300 font-mono">${Number(pos.currentPrice || 0).toFixed(2)}</td>
-                          <td className={`px-4 py-4 font-mono font-bold ${(pos.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {(pos.profit || 0) >= 0 ? '+' : ''}{(pos.profit || 0).toFixed(2)}%
-                          </td>
-                        </tr>
-                      ))}
-                      {enrichedPositions.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-10 text-center text-slate-500 bg-slate-900/10 italic">
-                            目前無主動持倉，系統正在尋找買入訊號...
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+              {/* Right Column: Decision Center & Portfolio Details */}
+              <div className="col-span-12 lg:col-span-8 space-y-8">
+                <TradeSignals />
+                
+                <Card className="bg-white/5 border-white/10 backdrop-blur-md border-t-emerald-500/20">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+                       <Briefcase className="h-4 w-4 text-slate-500" /> 持倉明細 (Current Positions)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left">
+                        <thead>
+                          <tr className="border-b border-white/10 text-slate-500 uppercase text-[10px] font-black tracking-widest">
+                            <th className="px-4 py-3">股票代碼 (Ticker)</th>
+                            <th className="px-4 py-3">股數 (Qty)</th>
+                            <th className="px-4 py-3">平均成本 (Avg)</th>
+                            <th className="px-4 py-3">目前價格 (Price)</th>
+                            <th className="px-4 py-3">預估盈虧 (P/L %)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5 font-mono">
+                          {enrichedPositions.map((pos) => (
+                            <tr key={pos.ticker} className="hover:bg-white/5 transition-colors group">
+                              <td className="px-4 py-4 font-bold text-white group-hover:text-emerald-400 transition-colors uppercase">{pos.ticker}</td>
+                              <td className="px-4 py-4 text-slate-300">{pos.shares}</td>
+                              <td className="px-4 py-4 text-slate-300">${Number(pos.avgCost || 0).toFixed(2)}</td>
+                              <td className="px-4 py-4 text-slate-300">${Number(pos.currentPrice || 0).toFixed(2)}</td>
+                              <td className={`px-4 py-4 font-bold ${(pos.profit || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {(pos.profit || 0) >= 0 ? '+' : ''}{(pos.profit || 0).toFixed(2)}%
+                              </td>
+                            </tr>
+                          ))}
+                          {enrichedPositions.length === 0 && (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-10 text-center text-slate-500 bg-slate-900/10 italic">
+                                目前無主動持倉，等待 AI 狙擊。
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
           </TabsContent>
 
           <TabsContent value="real" className="space-y-6">

@@ -2,7 +2,7 @@ import { createAdminSupabase } from '@/utils/supabase';
 import { watchlisthigh } from './watchlisthigh';
 import YahooFinance from 'yahoo-finance2';
 
-async function getAccessToken(userId: string) {
+async function getAccessToken(userId: string, forceRefresh: boolean = false) {
   const supabase = createAdminSupabase();
   const { data: settings } = await supabase
     .from('settings')
@@ -20,10 +20,12 @@ async function getAccessToken(userId: string) {
   const refreshToken = find('schwab_refresh_token');
   const expiresAt = Number(find('schwab_expires_at') || '0');
 
-  // If token is missing, expired, or near expiry (within 2 minutes), perform proactive refresh
+  // If token is missing, expired, near expiry, OR forceRefresh is requested
   const now = Date.now();
-  if (!accessToken || !expiresAt || now >= (expiresAt - 120000)) {
-    console.log(`[Schwab Engine] Token expired or near expiry for user [${userId}]. Refreshing...`);
+  const isNearExpiry = !accessToken || !expiresAt || now >= (expiresAt - 120000);
+
+  if (isNearExpiry || forceRefresh) {
+    console.log(`[Schwab Engine] Token refresh triggered for user [${userId}] (Forced: ${forceRefresh})...`);
     if (!refreshToken) throw new Error('Refresh token missing. Please re-authenticate.');
     
     const refreshed = await refreshAccessToken(userId, refreshToken);
@@ -410,19 +412,26 @@ export async function syncForMarketSnapshots() {
 }
 
 export async function getRealAccountData(userId: string) {
-  const token = await getAccessToken(userId);
+  let token = await getAccessToken(userId);
 
   // V25 Dynamic Discovery: Fetch the account list first to retrieve the user's specific accountHash
   try {
-    // 💡 修正：必須呼叫 /accountNumbers 才能取得 Schwab 專屬的 hashValue
-    const listUrl = `https://api.schwabapi.com/trader/v1/accounts/accountNumbers`;
-    const listResponse = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (!listResponse.ok) throw new Error(`Fetch Accounts List Error: ${listResponse.statusText}`);
+    let listUrl = `https://api.schwabapi.com/trader/v1/accounts/accountNumbers`;
+    let listResponse = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+    
+    // 🛡️ Automatic Retry for 401 Unauthorized
+    if (listResponse.status === 401) {
+      console.warn(`[Schwab Engine] 401 Unauthorized detected for user [${userId}]. Forcing token refresh and retrying...`);
+      token = await getAccessToken(userId, true); // Force Refresh
+      listResponse = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+    }
+
+    if (!listResponse.ok) {
+      throw new Error(`Fetch Accounts List Error: ${listResponse.status} ${listResponse.statusText}`);
+    }
 
     const accounts = await listResponse.json();
-
-    // 💡 加上這行，如果未來還有問題，我們就能在終端機直接看見 Schwab 到底回傳了什麼鬼東西
-    console.log(`[Schwab API] 回傳的帳戶列表:`, JSON.stringify(accounts));
+    console.log(`[Schwab API] 回傳的帳戶列表 (Count: ${accounts?.length || 0})`);
 
     if (!accounts || accounts.length === 0) throw new Error('No accounts found for this Schwab connection.');
 
@@ -450,7 +459,7 @@ export async function getRealAccountData(userId: string) {
       }))
     };
   } catch (e: any) {
-    console.error(`[V25 Sync] Dynamic Account Error to user [${userId}]:`, e.message);
+    console.error(`[Schwab Sync] Error for user [${userId}]:`, e.message);
     throw e;
   }
 }
